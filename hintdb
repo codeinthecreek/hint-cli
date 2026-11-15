@@ -4,7 +4,7 @@
 Sources (bash history, markdown/text notes, justfiles; files or directories) are
 listed in ~/.config/hintdb/sources. Every ingest is a full clean rebuild into a
 temp file that atomically replaces the DB, because dedup is global across sources.
-`query` rebuilds automatically when any source file changed (mtime/size).
+`query` and `match` rebuild automatically when any source file changed (mtime/size).
 
   hintdb add PATH... [--kind history|md|text|just]   register sources, rebuild
   hintdb remove PATH...                              unregister sources, rebuild
@@ -777,12 +777,27 @@ def fmt(entry):
 MATCH_MIN = float(os.environ.get("HINTDB_MATCH_MIN", "0.5"))
 
 
-def overlap(a, b):
-    """Jaccard overlap of argument tokens (tool word excluded)."""
-    sa, sb = set(a.split()[1:]), set(b.split()[1:])
+def jaccard(sa, sb):
     if not sa and not sb:
         return 1.0
     return len(sa & sb) / len(sa | sb)
+
+
+def flag_set(tokens):
+    """-x, --long (value after '=' dropped) and dig-style +opt tokens."""
+    return {t.split("=", 1)[0] for t in tokens if len(t) > 1 and t[0] in "-+"}
+
+
+def overlap(guess_shape, row_shape):
+    """(primary, all): primary is the overlap of option flags, ignoring values,
+    or of all tokens when the guess has no flags; all is the overlap of all
+    argument tokens (tool word excluded), used as tie-breaker. Shapes are
+    compared, so values are already placeholders."""
+    ga, ra = guess_shape.split()[1:], row_shape.split()[1:]
+    all_ = jaccard(set(ga), set(ra))
+    gf = flag_set(ga)
+    primary = jaccard(gf, flag_set(ra)) if gf else all_
+    return primary, all_
 
 
 def man_summary(con, tool):
@@ -845,23 +860,28 @@ def match(guesses, debug=False):
                 for display, examples, note, shp, count, kind in con.execute(
                         "SELECT display, examples, dnote, shape, count, kind FROM entries "
                         "WHERE cmdword = ?", (tool,)):
-                    cands.append((overlap(gshape, shp), count, shp,
+                    primary, all_ = overlap(gshape, shp)
+                    cands.append((primary, all_, count, shp,
                                   (display, examples, note, count, kind)))
-            cands.sort(key=lambda c: (c[0], c[1]), reverse=True)
+            cands.sort(key=lambda c: c[:3], reverse=True)
 
             dbg(f"guess: {guess}")
             dbg(f"  shape: {gshape}")
             dbg(f"  {len(cands)} rows for tool '{tool}'" + (", top:" if cands else ""))
-            for score, count, shp, _ in cands[:5]:
-                dbg(f"    {score:.2f}  x{count:<5} {shp}")
+            if cands:
+                if not flag_set(gshape.split()[1:]):
+                    dbg("  (guess has no flags: first column scores all tokens)")
+                dbg("    flags   all  uses   shape")
+            for primary, all_, count, shp, _ in cands[:5]:
+                dbg(f"    {primary:5.2f} {all_:5.2f}  x{count:<5} {shp}")
 
             if cands and cands[0][0] >= MATCH_MIN:
-                score = cands[0][0]
-                add_row(*cands[0][3])
-                if score < 1.0:
+                exact = cands[0][3] == gshape
+                add_row(*cands[0][4])
+                if not exact:
                     add_guess(guess, tool, True)
-                dbg(f"  -> {'exact' if score >= 1.0 else 'partial'} match "
-                    f"({score:.2f} >= {MATCH_MIN})" + ("" if score >= 1.0 else "; guess shown too"))
+                dbg(f"  -> {'exact' if exact else 'partial'} match "
+                    f"({cands[0][0]:.2f} >= {MATCH_MIN})" + ("" if exact else "; guess shown too"))
             else:
                 add_guess(guess, tool, bool(cands))
                 dbg(f"  -> no match (best {cands[0][0]:.2f} < {MATCH_MIN})" if cands
