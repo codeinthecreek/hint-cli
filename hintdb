@@ -13,6 +13,7 @@ temp file that atomically replaces the DB, because dedup is global across source
   hintdb update                                      rebuild only if sources changed
   hintdb query [-n N] [--no-update] WORDS...         print best matches as LLM context
   hintdb stats                                       row counts, for checking dedup
+  hintdb match [GUESS...]                            closest own row per guessed command
 
 Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
 separate man.db, rebuilt only when man-db's index changes. A query matching
@@ -467,7 +468,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 
 def fingerprint(files):
@@ -522,7 +523,7 @@ def build(files):
         return which_cache[word]
 
     rows = []
-    for g in groups.values():
+    for shp, g in groups.items():
         variants = g["variants"]
         count = sum(v[0] for v in variants.values())
         # One-off history-only lines whose command is not on PATH are probably
@@ -543,15 +544,15 @@ def build(files):
         # prog/args/data/variants/note are searched (with different weights);
         # display is UNINDEXED so placeholder words like "host" never match.
         rows.append((prog, args, data, " | ".join(examples), "; ".join(g["notes"])[:500],
-                     display, cmdword, count, max(v[1] for v in variants.values()), kind))
+                     display, cmdword, shp, count, max(v[1] for v in variants.values()), kind))
 
     write_db(DB, """
         CREATE VIRTUAL TABLE entries USING fts5(
           prog, args, data, variants, note,
-          display UNINDEXED, cmdword UNINDEXED,
+          display UNINDEXED, cmdword UNINDEXED, shape UNINDEXED,
           count UNINDEXED, recency UNINDEXED, kind UNINDEXED,
           tokenize = 'porter unicode61');
-        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
+        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
     return len(rows)
 
 
@@ -746,6 +747,80 @@ def fmt(entry):
         extra.append(("e.g.: " if "<" in display else "also: ") + variants)
     return line + (f"  [{'; '.join(extra)}]" if extra else "")
 
+# ---------------------------------------------------------------- match
+# Each LLM guess is compared with the user's rows for the same tool by token
+# overlap of the shapes (values are already placeholders on both sides).
+
+MATCH_MIN = float(os.environ.get("HINTDB_MATCH_MIN", "0.5"))
+
+
+def overlap(a, b):
+    """Jaccard overlap of argument tokens (tool word excluded)."""
+    sa, sb = set(a.split()[1:]), set(b.split()[1:])
+    if not sa and not sb:
+        return 1.0
+    return len(sa & sb) / len(sa | sb)
+
+
+def man_summary(con, tool):
+    if not os.path.exists(MANDB):
+        return None
+    try:
+        con.execute("ATTACH DATABASE ? AS man", (MANDB,))
+    except sqlite3.OperationalError:
+        pass  # already attached
+    row = con.execute("SELECT desc FROM man.pages WHERE name = ?", (tool,)).fetchone()
+    return row[0] if row else None
+
+
+def match(guesses):
+    """For each guess: the user's closest row if overlap >= MATCH_MIN,
+    otherwise the guess itself. Two lines per result: command, then status."""
+    out, shown = [], set()
+    con = sqlite3.connect(DB) if os.path.exists(DB) else sqlite3.connect(":memory:")
+    try:
+        for guess in guesses:
+            guess = norm(guess)
+            if not guess:
+                continue
+            prog = split_cmd(guess)[0]
+            tool = os.path.basename(prog.split()[0]) if prog else ""
+            gshape = shape(guess)
+            best = None
+            if tool and os.path.exists(DB):
+                for display, examples, note, shp, count, kind in con.execute(
+                        "SELECT display, variants, note, shape, count, kind FROM entries "
+                        "WHERE cmdword = ?", (tool,)):
+                    score = overlap(gshape, shp)
+                    key = (score, count)
+                    if best is None or key > best[0]:
+                        best = (key, display, examples, note, count, kind)
+            if best and best[0][0] >= MATCH_MIN:
+                _, display, examples, note, count, kind = best
+                if display in shown:
+                    continue
+                shown.add(display)
+                src = f"your history x{count}" if kind == "history" else "your notes"
+                status = src + (f": {note}" if note else "")
+                if "<" in display and examples:
+                    status += "; e.g. " + examples.split(" | ")[0]
+                out += [display, "  # " + status]
+            else:
+                if guess in shown:
+                    continue
+                shown.add(guess)
+                summary = man_summary(con, tool) if tool else None
+                if summary:
+                    status = f"model suggestion ({tool}: {summary})"
+                elif tool and not shutil.which(tool):
+                    status = f"model suggestion; {tool} not installed"
+                else:
+                    status = "model suggestion"
+                out += [guess, "  # " + status]
+    finally:
+        con.close()
+    return out
+
 # ---------------------------------------------------------------- cli
 
 
@@ -770,6 +845,9 @@ def main():
     sub.add_parser("rebuild")
     sub.add_parser("update")
     sub.add_parser("stats")
+    mt = sub.add_parser("match")
+    mt.add_argument("--no-update", action="store_true")
+    mt.add_argument("guesses", nargs="*", help="guessed commands; read from stdin if none")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
     q.add_argument("--no-update", action="store_true")
@@ -808,6 +886,12 @@ def main():
             con = sqlite3.connect(MANDB)
             print(f"man\t{con.execute('SELECT COUNT(*) FROM pages').fetchone()[0]} pages")
             con.close()
+    elif args.op == "match":
+        if not args.no_update:
+            update()
+        guesses = args.guesses or [ln for ln in sys.stdin.read().splitlines()]
+        for line in match(guesses):
+            print(line)
     elif args.op == "query":
         if not args.no_update:
             update()
