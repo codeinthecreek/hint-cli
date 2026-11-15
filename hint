@@ -1,0 +1,14 @@
+#!/bin/bash
+q="$*"
+words=$(printf '%s\n' $q | tr 'A-Z' 'a-z' | awk 'length >= 3' | sort -u | paste -sd'|')
+
+[ -n "$words" ] || words="$q"
+ctx=$( { grep -ihE -- "$words" "${HISTFILE:-$HOME/.bash_history}" | tail -n 30
+         grep -rihE -- "$words" "$HOME/notes/" 2>/dev/null | head -n 30; } | awk '!seen[$0]++' )
+
+ollama run qwen2.5-coder:3b "You are a Linux command lookup. Reply with only the command(s), one per line, no prose, no markdown.
+Relevant lines from the user's own shell history and notes (prefer their style, paths and flags; trailing '# ...' are their annotations):
+$ctx
+
+Request: $q"
+
