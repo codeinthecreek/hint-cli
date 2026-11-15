@@ -11,10 +11,30 @@ hint() {
 
   ctx=$(hintdb query -n "${HINT_N:-15}" -- "$q") || return
 
-  ollama run "${HINT_MODEL:-qwen2.5-coder:3b}" "You are a Linux command lookup. Reply with only the command(s), one per line, no prose, no markdown.
-Below are relevant entries from the user's own shell history, notes and justfiles. Format: command  # user's note  [xN = times used; also/e.g.: real variants]. <HOST>, <PATH>, <FILE>, <N> mark parts that vary between uses. Rows tagged [man name(sec)] are man page summaries naming a tool, not the user's usage; the rows after one are the user's own uses of that tool. Prefer the user's style, paths and flags. Adapt arguments to the request. If nothing below fits, answer from general knowledge.
+  ollama run "${HINT_MODEL:-qwen2.5-coder:3b}" "You answer a Linux command lookup request with 1 to 3 complete command lines, best first, one per line. Output nothing else: no prose, no numbering, no markdown.
 
+Rules:
+- Each line must directly do what the request asks. Ignore context entries that only mention the same topic.
+- A bare tool name is not an answer. Give the full command with arguments.
+- Prefer the user's own form: the variant with the highest xN, with their usual flags.
+- Keep placeholders like <HOST>, <PATH>, <FILE>, <N> for values the user must fill in, unless the request gives the value.
+- If no context entry fits, answer from general knowledge.
+
+Context format: command  # user's note  [xN = times used; also/e.g.: real variants]. A row tagged [man name(sec)] is a man page summary naming a tool; the rows right after it are the user's own uses of that tool.
+
+Example:
+Context:
+du  # estimate file space usage  [man du(1)]
+du -sh <PATH>  [x40; e.g.: du -sh /var/log | du -sh ~/work]
+ncdu <PATH>  [x3]
+df -h  [x12]
+Request: disk usage of a directory
+Answer:
+du -sh <PATH>
+ncdu <PATH>
+
+Context:
 ${ctx:-(no matching entries)}
-
-Request: $q"
+Request: $q
+Answer:"
 }
