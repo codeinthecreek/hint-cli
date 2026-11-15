@@ -64,6 +64,9 @@ SECRET = re.compile(
     r"AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,})"
 )
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Commands never indexed: lookups made with this tool itself, plus any extra
+# command words listed in HINTDB_IGNORE (space-separated).
+IGNORE_CMDS = {"hint", "hintdb"} | set(os.environ.get("HINTDB_IGNORE", "").split())
 
 # Placeholders for near-duplicate collapsing. Flags are deliberately untouched so
 # `rm -rf <PATH>` and `rm -i <PATH>` stay different shapes.
@@ -464,11 +467,11 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 def fingerprint(files):
-    h = hashlib.sha1(f"schema {SCHEMA_VERSION}\n".encode())
+    h = hashlib.sha1(f"schema {SCHEMA_VERSION}\nignore {sorted(IGNORE_CMDS)}\n".encode())
     for kind, p in files:
         try:
             st = os.stat(p)
@@ -493,6 +496,8 @@ def build(files):
         for i, (cmd, note) in enumerate(rows):
             cmd = norm(cmd)
             if not cmd or SECRET.search(cmd):
+                continue
+            if os.path.basename(first_word(cmd)) in IGNORE_CMDS:
                 continue
             if is_trivial(cmd) and not note:
                 continue
