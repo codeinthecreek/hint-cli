@@ -1,0 +1,7 @@
+set shell := ["bash", "-c"]
+# rebuild the cluster from scratch
+rebuild target='lab': clean
+    @terraform destroy -auto-approve
+    terraform apply -var env={{target}}
+clean:
+    rm -rf .terraform

@@ -1,0 +1,9 @@
+dig (1)              - DNS lookup utility
+host (1)             - DNS lookup utility
+nslookup (1)         - query Internet name servers interactively
+resolvectl (1)       - Resolve domain names, IPV4 and IPv6 addresses, DNS resource records, and services
+ssh (1)              - OpenSSH remote login client
+ssh-keygen (1)       - OpenSSH authentication key utility
+tar (1)              - an archiving utility
+dig (1p)             - POSIX copy, should be skipped
+getaddrinfo (3)      - network address and service translation

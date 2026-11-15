@@ -30,19 +30,22 @@ them only with agreement. README.md covers usage and architecture.
 
 ## Testing
 
-- Never commit or paste real shell history. Use small synthetic fixtures that
-  reproduce the case at hand.
+- Run `tests/run.sh`. It uses only `tests/fixtures` and the stub server
+  `tests/stub_ollama.py`, and never touches the real index, history or Ollama.
+- Never commit or paste real shell history. Fixtures are synthetic and use
+  example hostnames (example.org, 192.0.2.x, 2001:db8::). Add a fixture line and
+  a check to `tests/run.sh` for each behaviour that changes or each bug fixed.
+- Check designed behaviour only. Known limitations (README) are not encoded as
+  expected results.
 - Isolate test runs from the real index with `HINTDB_DB`, `HINTDB_SOURCES` and
   `HISTFILE` pointing into a scratch directory, and `HINTDB_NO_MAN=1` or
   `HINTDB_APROPOS="cat <fake apropos output>"` for man pages.
 - Test `hint` against a stub HTTP server that mimics `/api/chat`, including
   messy replies (fences, numbering, `$ ` prompts) and replies that ignore
   instructions.
-- Before handing over a change:
-  - `python3 -m py_compile hintdb`
-  - `bash -n hint`
-  - check for non-ASCII characters in changed files
-  - run the affected `hintdb match --debug` cases and show the output
+- Before handing over a change, run `tests/run.sh` (it also checks syntax,
+  ASCII and that both scripts are executable), and show the affected
+  `hintdb match --debug` output.
 - The user tests locally on the real machine with real history. Ask for
   `HINT_DEBUG=1` output when a result looks wrong, and diagnose from the score
   table before changing anything.
