@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+"""hintdb - cleaned, deduplicated command index for `hint` (SQLite FTS5, stdlib only).
+
+Sources (bash history, markdown/text notes, justfiles; files or directories) are
+listed in ~/.config/hintdb/sources. Every ingest is a full clean rebuild into a
+temp file that atomically replaces the DB, because dedup is global across sources.
+`query` rebuilds automatically when any source file changed (mtime/size).
+
+  hintdb add PATH... [--kind history|md|text|just]   register sources, rebuild
+  hintdb remove PATH...                              unregister sources, rebuild
+  hintdb sources                                     list registered sources
+  hintdb rebuild                                     force a clean ingest
+  hintdb update                                      rebuild only if sources changed
+  hintdb query [-n N] [--no-update] WORDS...         print best matches as LLM context
+  hintdb stats                                       row counts, for checking dedup
+"""
+import argparse
+import hashlib
+import math
+import os
+import re
+import shutil
+import sqlite3
+import sys
+import tempfile
+
+XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+XDG_CONF = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
+SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
+
+KINDS = ("history", "md", "text", "just")
+NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just"}
+JUST_NAMES = {"justfile", ".justfile"}
+
+# ---------------------------------------------------------------- cleaning rules
+
+TRIVIAL = {
+    "ls", "ll", "la", "l", "cd", "pwd", "clear", "exit", "logout", "history",
+    "bg", "fg", "jobs", "true", "false", "reset", "top", "htop", "w", "who",
+    "whoami", "date", "vim", "vi", "nvim", "nano", "less", "more", "cat", "man",
+    "z", "j", "..", "-", "source", ".",
+}
+BUILTINS = {
+    "alias", "bind", "builtin", "caller", "command", "declare", "echo", "enable",
+    "eval", "exec", "export", "getopts", "hash", "help", "let", "local", "mapfile",
+    "printf", "read", "readarray", "readonly", "return", "set", "shift", "shopt",
+    "test", "times", "trap", "type", "typeset", "ulimit", "umask", "unalias",
+    "unset", "wait", "for", "while", "if", "until", "case", "time", "[", "[[",
+    "{", "(", "!", "function", "pushd", "popd", "dirs", "disown", "kill",
+    "suspend", "compgen", "complete", "fc",
+}
+SECRET = re.compile(
+    r"(?i)(passw(or)?d|passwd|secret|token|api[_-]?key|authorization:|bearer\s|"
+    r"AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,})"
+)
+ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# Placeholders for near-duplicate collapsing. Flags are deliberately untouched so
+# `rm -rf <PATH>` and `rm -i <PATH>` stay different shapes.
+SHAPE_SUBS = [
+    (re.compile(r"'[^']*'|\"[^\"]*\""), "<STR>"),
+    (re.compile(r"\b[\w.+-]+@[\w-]+(\.[\w-]+)+\b"), "<USER@HOST>"),
+    (re.compile(r"\bhttps?://\S+"), "<URL>"),
+    (re.compile(r"\b\d{1,3}(\.\d{1,3}){3}(/\d+)?\b"), "<IP>"),
+    (re.compile(r"\b[0-9a-f]{7,}\b"), "<HEX>"),
+    (re.compile(r"(?<![\w<-])(~|\.{1,2})?/[\w.@%+~/-]*"), "<PATH>"),
+    (re.compile(r"(?<![\w-])\d+(\.\d+)*\b"), "<N>"),
+]
+
+STOP = {
+    "a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "from", "with",
+    "by", "at", "is", "it", "its", "be", "do", "does", "how", "what", "which",
+    "can", "i", "me", "my", "you", "your", "get", "show", "find", "list", "use",
+    "using", "command", "commands", "way", "want", "need", "into", "that", "this",
+    "all", "some", "any", "should", "would", "could", "there", "then",
+}
+
+
+def split_comment(line):
+    """Split `cmd   # note` on the first unquoted '#' that starts a word."""
+    sq = dq = esc = False
+    prev = " "
+    for i, ch in enumerate(line):
+        if esc:
+            esc = False
+        elif ch == "\\" and not sq:
+            esc = True
+        elif ch == "'" and not dq:
+            sq = not sq
+        elif ch == '"' and not sq:
+            dq = not dq
+        elif ch == "#" and not sq and not dq and prev in " \t":
+            return line[:i].strip(), line[i + 1:].strip()
+        prev = ch
+    return line.strip(), ""
+
+
+def norm(cmd):
+    return " ".join(cmd.split())
+
+
+TRAILING_NUM = re.compile(r"(?<=[A-Za-z_])\d+\b")
+
+
+def shape(cmd):
+    s = norm(cmd)
+    for pat, rep in SHAPE_SUBS:
+        s = pat.sub(rep, s)
+    # node1/node2, eth0, unit60 -> node<N> ... in arguments only, so the
+    # command word itself (python3, md5sum) stays distinct.
+    head, _, rest = s.partition(" ")
+    return head + (" " + TRAILING_NUM.sub("<N>", rest) if rest else "")
+
+
+def first_word(cmd):
+    words = cmd.split()
+    while words and (ASSIGN.match(words[0]) or words[0] in ("sudo", "doas", "env", "nohup", "exec", "time")):
+        words.pop(0)
+    return words[0] if words else ""
+
+
+def is_trivial(cmd):
+    words = cmd.split()
+    return len(cmd) < 4 or (words[0] in TRIVIAL and len(words) <= 2)
+
+
+def join_notes(*parts):
+    out = []
+    for p in parts:
+        p = (p or "").strip()
+        if p and p not in out:
+            out.append(p)
+    return "; ".join(out)
+
+# ---------------------------------------------------------------- extractors
+# Each yields (cmd, note).
+
+
+def read_lines(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            yield line.rstrip("\n")
+
+
+def extract_history(path):
+    for line in read_lines(path):
+        if re.fullmatch(r"#\d{9,11}", line):  # HISTTIMEFORMAT stamp lines
+            continue
+        cmd, note = split_comment(line)
+        if cmd:
+            yield cmd, note
+
+
+FENCE = re.compile(r"^\s*(```+|~~~+)\s*([\w+-]*)")
+SHELL_LANGS = {"", "bash", "sh", "shell", "zsh", "console", "shell-session",
+               "sh-session", "terminal", "shellsession", "just"}
+PROMPT_ONLY = {"console", "shell-session", "sh-session", "terminal", "shellsession"}
+
+
+def extract_markdown(path):
+    """Commands from shell fences and `$ ` lines; note = heading + last prose line
+    + preceding `# comment` in the block + trailing comment."""
+    heading = prose = cmt = pending = ""
+    fence = None
+    lang = ""
+    for line in read_lines(path):
+        s = line.strip()
+        if fence:
+            if s.startswith(fence):
+                fence, cmt, pending = None, "", ""
+                continue
+            if lang not in SHELL_LANGS:
+                continue
+            if lang in PROMPT_ONLY:
+                if not s.startswith("$ "):
+                    continue
+                s = s[2:]
+            else:
+                if s.startswith("$ "):
+                    s = s[2:]
+                if not s:
+                    cmt = ""
+                    continue
+                if s.startswith("#") and not pending:
+                    cmt = s.lstrip("#").strip()
+                    continue
+            if pending:
+                s = pending + " " + s
+                pending = ""
+            if s.endswith("\\"):
+                pending = s[:-1].strip()
+                continue
+            cmd, note = split_comment(s)
+            if cmd:
+                yield cmd, join_notes(heading, prose, cmt, note)
+            continue
+        m = FENCE.match(line)
+        if m:
+            fence, lang = m.group(1), m.group(2).lower()
+            continue
+        if s.startswith("#"):
+            heading, prose = s.lstrip("#").strip(), ""
+        elif s.startswith("$ "):
+            cmd, note = split_comment(s[2:])
+            if cmd:
+                yield cmd, join_notes(heading, prose, note)
+        elif s:
+            prose = s[:200]
+
+
+def extract_text(path):
+    """Plain text: only `$ ` lines are commands; note = nearest non-command line."""
+    ctx = ""
+    for line in read_lines(path):
+        s = line.strip()
+        if s.startswith("$ "):
+            cmd, note = split_comment(s[2:])
+            if cmd:
+                yield cmd, join_notes(ctx, note)
+        elif s:
+            ctx = s.lstrip("#").strip()[:200]
+
+
+RECIPE = re.compile(r"^@?([A-Za-z_][\w-]*)(?:\s[^:]*)?:(?!=)")
+
+
+def extract_just(path):
+    """Recipe body lines; note = `just <recipe>` + doc comment above the recipe."""
+    recipe = None
+    doc = comment = ""
+    for line in read_lines(path):
+        if not line.strip():
+            continue
+        if line[:1] in " \t":
+            if recipe is None:
+                continue
+            s = line.strip()
+            if s.startswith("#"):  # shebang or comment inside a recipe
+                continue
+            cmd, note = split_comment(s.lstrip("@-").strip())
+            if cmd:
+                yield cmd, join_notes("just " + recipe, doc, note)
+            continue
+        s = line.strip()
+        if s.startswith("#"):
+            comment = s.lstrip("#").strip()
+            continue
+        if s.startswith("["):  # recipe attributes like [private]
+            continue
+        m = RECIPE.match(line)
+        if m:
+            recipe, doc, comment = m.group(1), comment, ""
+        else:
+            recipe, comment = None, ""
+
+
+EXTRACT = {"history": extract_history, "md": extract_markdown,
+           "text": extract_text, "just": extract_just}
+
+# ---------------------------------------------------------------- sources
+
+
+def detect_kind(path):
+    base = os.path.basename(path)
+    if base.lower() in JUST_NAMES:
+        return "just"
+    ext = os.path.splitext(base)[1].lower()
+    if ext in NOTE_EXT:
+        return NOTE_EXT[ext]
+    if "history" in base.lower():
+        return "history"
+    return None
+
+
+def load_sources():
+    if not os.path.exists(SOURCES):
+        hist = os.environ.get("HISTFILE") or os.path.expanduser("~/.bash_history")
+        save_sources([("history", hist)])
+    out = []
+    for line in read_lines(SOURCES):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        kind, _, path = line.partition("\t")
+        out.append((kind, path))
+    return out
+
+
+def save_sources(srcs):
+    os.makedirs(os.path.dirname(SOURCES), exist_ok=True)
+    with open(SOURCES, "w") as f:
+        f.write("# kind<TAB>path   kind: history|md|text|just|auto (auto = detect per file)\n")
+        for kind, path in srcs:
+            f.write(f"{kind}\t{path}\n")
+
+
+def expand(srcs):
+    """Registered sources -> concrete (kind, file) list. Directories are walked,
+    skipping hidden dirs; files with no detectable kind are ignored there."""
+    files = []
+    for kind, path in srcs:
+        if os.path.isdir(path):
+            for root, dirs, names in os.walk(path):
+                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                for n in sorted(names):
+                    p = os.path.join(root, n)
+                    k = detect_kind(p) if kind == "auto" else kind
+                    if k:
+                        files.append((k, p))
+        elif os.path.isfile(path):
+            k = detect_kind(path) if kind == "auto" else kind
+            files.append((k or "text", path))
+        else:
+            print(f"hintdb: source missing, skipped: {path}", file=sys.stderr)
+    return files
+
+
+def fingerprint(files):
+    h = hashlib.sha1()
+    for kind, p in files:
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        h.update(f"{kind}\0{p}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
+    return h.hexdigest()
+
+# ---------------------------------------------------------------- build
+
+
+def build(files):
+    groups = {}   # shape -> group dict
+    exact = {}    # normalized cmd -> [count, last_seen, kind]
+    for kind, path in files:
+        try:
+            rows = list(EXTRACT[kind](path))
+        except OSError as e:
+            print(f"hintdb: cannot read {path}: {e}", file=sys.stderr)
+            continue
+        total = max(len(rows), 1)
+        for i, (cmd, note) in enumerate(rows):
+            cmd = norm(cmd)
+            if not cmd or SECRET.search(cmd):
+                continue
+            if is_trivial(cmd) and not note:
+                continue
+            recency = (i + 1) / total if kind == "history" else 0.0
+            e = exact.setdefault(cmd, [0, 0.0, kind])
+            e[0] += 1
+            e[1] = max(e[1], recency)
+            if kind != "history":
+                e[2] = kind
+            g = groups.setdefault(shape(cmd), {"variants": {}, "notes": [], "kinds": set()})
+            g["variants"][cmd] = e
+            g["kinds"].add(kind)
+            if note and note not in g["notes"]:
+                g["notes"].append(note)
+
+    which_cache = {}
+
+    def known(word):
+        if word not in which_cache:
+            which_cache[word] = ("/" in word or word in BUILTINS
+                                 or shutil.which(word) is not None)
+        return which_cache[word]
+
+    rows = []
+    for g in groups.values():
+        variants = g["variants"]
+        count = sum(v[0] for v in variants.values())
+        # One-off history-only lines whose command is not on PATH are probably
+        # typos. Repeated ones survive (aliases, functions).
+        if g["kinds"] == {"history"} and count == 1 and not g["notes"]:
+            if not known(first_word(next(iter(variants)))):
+                continue
+        ranked = sorted(variants.items(), key=lambda kv: (kv[1][1], kv[1][0]), reverse=True)
+        best = ranked[0][0]
+        others = [c for c, _ in sorted(ranked[1:], key=lambda kv: kv[1][0], reverse=True)[:2]]
+        kind = "history" if g["kinds"] == {"history"} else "note"
+        rows.append((best, " | ".join(others), "; ".join(g["notes"])[:500],
+                     count, max(v[1] for v in variants.values()), kind))
+
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(DB), suffix=".tmp")
+    os.close(fd)
+    try:
+        con = sqlite3.connect(tmp)
+        con.executescript("""
+            CREATE VIRTUAL TABLE entries USING fts5(
+              cmd, variants, note,
+              count UNINDEXED, recency UNINDEXED, kind UNINDEXED,
+              tokenize = 'porter unicode61');
+            CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+        """)
+        con.executemany("INSERT INTO entries VALUES (?,?,?,?,?,?)", rows)
+        con.execute("INSERT INTO meta VALUES ('fingerprint', ?)", (fingerprint(files),))
+        con.commit()
+        con.close()
+        os.replace(tmp, DB)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    return len(rows)
+
+
+def stored_fingerprint():
+    if not os.path.exists(DB):
+        return None
+    try:
+        con = sqlite3.connect(DB)
+        row = con.execute("SELECT value FROM meta WHERE key='fingerprint'").fetchone()
+        con.close()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+
+
+def update(force=False):
+    files = expand(load_sources())
+    if force or stored_fingerprint() != fingerprint(files):
+        return build(files)
+    return None
+
+# ---------------------------------------------------------------- query
+
+
+def fts_query(text):
+    terms = []
+    for t in re.findall(r"[\w./-]+", text.lower()):
+        t = t.strip("./-")
+        if len(t) < 2 or t in STOP:
+            continue
+        terms.append('"%s"' % t.replace('"', '""'))
+    return " OR ".join(dict.fromkeys(terms))
+
+
+def query(text, n):
+    q = fts_query(text)
+    if not q or not os.path.exists(DB):
+        return []
+    con = sqlite3.connect(DB)
+    try:
+        rows = con.execute(
+            "SELECT cmd, variants, note, count, recency, kind, bm25(entries, 1.0, 0.5, 2.0) "
+            "FROM entries WHERE entries MATCH ? ORDER BY bm25(entries, 1.0, 0.5, 2.0) LIMIT ?",
+            (q, max(n * 4, 40))).fetchall()
+    finally:
+        con.close()
+
+    def score(r):
+        _, _, _, count, recency, kind, bm = r
+        return bm - 0.3 * math.log(count) - 0.5 * recency - (0.3 if kind == "note" else 0)
+
+    return sorted(rows, key=score)[:n]
+
+
+def fmt(row):
+    cmd, variants, note, count, _, _, _ = row
+    line = cmd + (f"  # {note}" if note else "")
+    extra = []
+    if count > 1:
+        extra.append(f"x{count}")
+    if variants:
+        extra.append("also: " + variants)
+    return line + (f"  [{'; '.join(extra)}]" if extra else "")
+
+# ---------------------------------------------------------------- cli
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="hintdb", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="op", required=True)
+    a = sub.add_parser("add")
+    a.add_argument("paths", nargs="+")
+    a.add_argument("--kind", choices=KINDS)
+    r = sub.add_parser("remove")
+    r.add_argument("paths", nargs="+")
+    sub.add_parser("sources")
+    sub.add_parser("rebuild")
+    sub.add_parser("update")
+    sub.add_parser("stats")
+    q = sub.add_parser("query")
+    q.add_argument("-n", type=int, default=15)
+    q.add_argument("--no-update", action="store_true")
+    q.add_argument("words", nargs="*")
+    args = ap.parse_args()
+
+    if args.op in ("add", "remove"):
+        srcs = load_sources()
+        paths = [os.path.abspath(os.path.expanduser(p)) for p in args.paths]
+        if args.op == "add":
+            for p in paths:
+                if not os.path.exists(p):
+                    sys.exit(f"hintdb: no such file or directory: {p}")
+                if not any(sp == p for _, sp in srcs):
+                    srcs.append((args.kind or "auto", p))
+        else:
+            srcs = [(k, sp) for k, sp in srcs if sp not in paths]
+        save_sources(srcs)
+        print(f"hintdb: {update(force=True)} entries")
+    elif args.op == "sources":
+        for kind, path in load_sources():
+            print(f"{kind}\t{path}")
+    elif args.op == "rebuild":
+        print(f"hintdb: {update(force=True)} entries")
+    elif args.op == "update":
+        n = update()
+        print("hintdb: up to date" if n is None else f"hintdb: {n} entries")
+    elif args.op == "stats":
+        update()
+        con = sqlite3.connect(DB)
+        for kind, c, s in con.execute(
+                "SELECT kind, COUNT(*), SUM(count) FROM entries GROUP BY kind"):
+            print(f"{kind}\t{c} entries from {s} raw lines")
+        con.close()
+    elif args.op == "query":
+        if not args.no_update:
+            update()
+        for row in query(" ".join(args.words), args.n):
+            print(fmt(row))
+
+
+if __name__ == "__main__":
+    main()
