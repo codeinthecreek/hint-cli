@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# hint - natural-language command lookup.
+#
+#   hint how do I create an ssh tunnel
+#
+# 1. An LLM (Ollama chat API) guesses 1-3 commands for the request.
+# 2. hintdb match replaces each guess with the closest command from the
+#    user's own history/notes (same tool, token overlap), or keeps the guess
+#    marked as a model suggestion.
+# Nothing is executed.
+#
+# Env:
+#   HINT_MODEL   Ollama model           (default qwen2.5-coder:3b)
+#   OLLAMA_HOST  Ollama server URL      (default http://localhost:11434)
+#   HINT_DEBUG   set to print the raw model guesses and match scores to stderr
+# Requires: curl, jq, hintdb.
+#
+# Note: a script can't flush the calling shell's history. For commands from
+# the current session to be indexed, the interactive shell needs
+# `history -a` in PROMPT_COMMAND (or an equivalent hook).
+
+set -o pipefail
+
+usage() { echo "usage: hint <what you want to do>" >&2; exit 2; }
+[ $# -gt 0 ] || usage
+case "$1" in -h|--help|help) usage ;; esac
+
+for dep in curl jq hintdb; do
+  command -v "$dep" >/dev/null || { echo "hint: $dep not found in PATH" >&2; exit 1; }
+done
+
+query="$*"
+model="${HINT_MODEL:-qwen2.5-coder:3b}"
+host="${OLLAMA_HOST:-http://localhost:11434}"
+case "$host" in http://*|https://*) ;; *) host="http://$host" ;; esac
+
+system="You suggest Linux shell commands. Reply with 1 to 3 commands that do what the user's request asks, best first, one per line. Each line is one complete command with example arguments. Output only the commands: no prose, no numbering, no markdown."
+
+# One worked example as a prior exchange, then the real request.
+body=$(jq -n --arg model "$model" --arg system "$system" --arg query "$query" '{
+  model: $model, stream: false,
+  options: { temperature: 0, num_predict: 120 },
+  messages: [
+    { role: "system",    content: $system },
+    { role: "user",      content: "show disk usage of a directory" },
+    { role: "assistant", content: "du -sh /var/log\nncdu /var/log" },
+    { role: "user",      content: $query }
+  ]
+}')
+
+resp=$(curl -sS --fail-with-body --max-time 60 \
+         -H 'Content-Type: application/json' \
+         -d "$body" "$host/api/chat") || {
+  echo "hint: no response from Ollama at $host (model $model)" >&2
+  [ -n "$resp" ] && echo "$resp" >&2
+  exit 1
+}
+
+raw=$(jq -r '.message.content // empty' <<<"$resp")
+[ -n "${HINT_DEBUG:-}" ] && printf 'hint: model guesses:\n%s\n' "$raw" >&2
+
+# Clean model output: drop fences and blank lines, strip "$ " prompts,
+# numbering and bullets; keep at most 3 lines.
+mapfile -t guesses < <(
+  printf '%s\n' "$raw" |
+  sed -E -e '/^[[:space:]]*```/d' \
+         -e 's/^[[:space:]]*([0-9]+[.)]|[-*])[[:space:]]+//' \
+         -e 's/^[[:space:]]*\$[[:space:]]+//' \
+         -e 's/^[[:space:]]+|[[:space:]]+$//g' \
+         -e '/^$/d' |
+  head -n 3
+)
+
+[ ${#guesses[@]} -gt 0 ] || { echo "hint: model returned no commands" >&2; exit 1; }
+
+dbg=()
+[ -n "${HINT_DEBUG:-}" ] && dbg=(--debug)
+hintdb match "${dbg[@]}" -- "${guesses[@]}"
