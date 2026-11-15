@@ -1,0 +1,44 @@
+ls
+cd /etc
+gerpx foo bar
+export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz123456
+hint dns lookup
+hintdb query dns lookup
+sudo hintdb rebuild
+ssh-keygen -f "/home/user/.ssh/known_hosts" -R "192.0.2.10"  # remove offending ECDSA key
+ssh-keygen -f "/home/user/.ssh/known_hosts" -R "web1.example.org"  # remove offending ECDSA key
+ssh-keygen -f "/home/user/.ssh/known_hosts" -R db.example.org  # remove   offending ECDSA key
+ssh-keygen -f '/home/user/.ssh/known_hosts' -R 2001:db8::1
+tail -f /var/log/nginx/access.log
+tail -f /var/log/nginx/error.log
+tail -f /var/log/syslog
+tar -czf backup-2025.tar.gz docs
+tar -czf backup-2026.tar.gz docs
+python3 -m http.server 8000
+python3 -m http.server 8000
+grep DNS notes/a.txt
+grep DNS notes/b.txt
+resolvectl dns
+resolvectl dns
+mkdir scratch/dir1
+mkdir scratch/dir2
+mkdir scratch/dir3
+mkdir scratch/dir4
+mkdir scratch/dir5
+mkdir /dev/video1394  # create firewire devices
+dig +short web1.example.org
+dig +short web2.example.org
+dig +short web3.example.org
+dig web1.example.org
+dig web2.example.org
+ssh user@host1.example.org
+ssh user@host2.example.org
+ssh user@host3.example.org
+ssh user@host4.example.org
+ssh user@host5.example.org
+ssh user@host6.example.org
+ssh -L 8080:localhost:80 -i ~/.ssh/key user@gpu1.example.org
+ssh -L 8080:localhost:80 -i ~/.ssh/key user@gpu2.example.org
+ssh -L 0.0.0.0:11434:localhost:11434 -i ~/.ssh/key user@gpu1.example.org
+ssh -L 0.0.0.0:11434:localhost:11434 -i ~/.ssh/key user@gpu2.example.org
+ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres
