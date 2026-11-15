@@ -12,7 +12,7 @@ hint() {
   ctx=$(hintdb query -n "${HINT_N:-15}" -- "$q") || return
 
   ollama run "${HINT_MODEL:-qwen2.5-coder:3b}" "You are a Linux command lookup. Reply with only the command(s), one per line, no prose, no markdown.
-Below are relevant entries from the user's own shell history, notes and justfiles. Format: command  # user's note  [xN = times used; also: other variants]. Prefer the user's style, paths and flags. Adapt arguments to the request. If nothing below fits, answer from general knowledge.
+Below are relevant entries from the user's own shell history, notes and justfiles. Format: command  # user's note  [xN = times used; also/e.g.: real variants]. <HOST>, <PATH>, <FILE>, <N> mark parts that vary between uses. Rows tagged [man name(sec)] are man page summaries naming a tool, not the user's usage; the rows after one are the user's own uses of that tool. Prefer the user's style, paths and flags. Adapt arguments to the request. If nothing below fits, answer from general knowledge.
 
 ${ctx:-(no matching entries)}
 

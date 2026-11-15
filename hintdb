@@ -13,16 +13,25 @@ temp file that atomically replaces the DB, because dedup is global across source
   hintdb update                                      rebuild only if sources changed
   hintdb query [-n N] [--no-update] WORDS...         print best matches as LLM context
   hintdb stats                                       row counts, for checking dedup
+
+Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
+separate man.db, rebuilt only when man-db's index changes. A query matching
+"DNS lookup" finds `dig - DNS lookup utility` and then pulls in the user's own
+`dig` rows. Set HINTDB_NO_MAN=1 to disable.
 """
 import argparse
+import glob
 import hashlib
 import math
 import os
 import re
+import shlex
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
+import time
 
 XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
 XDG_CONF = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
@@ -88,6 +97,16 @@ def _host(m):
     return "<HOST>"
 
 
+# Absolute, home, dot-relative and plain relative paths (anything containing '/').
+PATH = re.compile(r"(?<![\w<./@-])(?:~|\.{1,2}|[\w.@%+-]+)?/[\w.@%+~/-]*")
+# A bare file name with a known extension, e.g. backup.tar.gz, app.conf
+BARE_FILE = re.compile(r"(?<![\w./<@-])[\w+-][\w.+-]*\.([A-Za-z0-9]+)(?![\w.-])")
+
+
+def _file(m):
+    return "<FILE>" if m.group(1).lower() in FILE_EXT else m.group(0)
+
+
 def host_template(cmd):
     """Replace only host names / IPs in a real command, keeping everything else."""
     return HOSTNAME_AT.sub(_host, IPV6.sub("<HOST>", IPV4.sub("<HOST>", cmd)))
@@ -100,10 +119,11 @@ SHAPE_SUBS = [
     (re.compile(r"'[^']*'|\"[^\"]*\""), "<STR>"),
     (re.compile(r"\bhttps?://\S+"), "<URL>"),
     (re.compile(r"\b[\w.+-]+@[\w.-]+\b"), "<USER@HOST>"),
-    (re.compile(r"(?<![\w<-])(~|\.{1,2})?/[\w.@%+~/-]*"), "<PATH>"),
-    (re.compile(r"\b\d{1,3}(\.\d{1,3}){3}(/\d+)?\b"), "<HOST>"),
-    (re.compile(r"\b[0-9a-fA-F:]*::[0-9a-fA-F:]*\b"), "<HOST>"),  # IPv6 with ::
+    (PATH, "<PATH>"),
+    (IPV4, "<HOST>"),
+    (IPV6, "<HOST>"),
     (HOSTNAME, _host),
+    (BARE_FILE, _file),
     (re.compile(r"\b[0-9a-f]{7,}\b"), "<HEX>"),
     (re.compile(r"(?<![\w-])\d+(\.\d+)*\b"), "<N>"),
 ]
@@ -151,6 +171,83 @@ def shape(cmd):
     # command word itself (python3, md5sum) stays distinct.
     head, _, rest = s.partition(" ")
     return head + (" " + TRAILING_NUM.sub("<N>", rest) if rest else "")
+
+
+TOKEN = re.compile(r"""(?:'[^']*'|"[^"]*"|\S)+""")
+
+
+def unquote(t):
+    return t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"" else t
+
+
+def token_shape(t):
+    for pat, rep in SHAPE_SUBS:
+        t = pat.sub(rep, t)
+    return TRAILING_NUM.sub("<N>", t)
+
+
+def template(variants):
+    """Display form for a group: tokens identical in every variant are kept
+    as written in variants[0]; tokens that vary become placeholders
+    (jl@<HOST>, /var/log/<PATH>, <FILE>, <N> ...)."""
+    if len(variants) < 2:
+        return variants[0]
+    toks = [TOKEN.findall(v) for v in variants]
+    if len({len(t) for t in toks}) != 1:
+        return host_template(variants[0])
+    out = []
+    for col in zip(*toks):
+        raw = [unquote(t) for t in col]
+        if len(set(raw)) == 1:
+            out.append(col[0])
+            continue
+        hosts = {host_template(t) for t in raw}
+        if len(hosts) == 1:
+            out.append(hosts.pop())
+            continue
+        if all(PATH.fullmatch(t) for t in raw):
+            try:
+                cp = os.path.commonpath(raw)
+            except ValueError:
+                cp = ""
+            out.append(cp.rstrip("/") + "/<PATH>" if cp not in ("", "/", ".", "~") else "<PATH>")
+            continue
+        out.append(token_shape(raw[0]))
+    return " ".join(out)
+
+
+# Tools whose arguments are data (a search pattern, text to print), so a query
+# word appearing in them says little about what the command does.
+SEARCH_TOOLS = {"grep", "egrep", "fgrep", "zgrep", "rg", "ag", "ack", "find", "fd",
+                "locate", "plocate", "sed", "awk", "echo", "printf"}
+CMD_SEP = {"|", "||", "&&", ";", "|&"}
+PREFIX = {"sudo", "doas", "env", "nohup", "exec", "time", "command", "nice",
+          "ionice", "watch", "xargs", "builtin"}
+
+
+def split_cmd(cmd):
+    """Split a command into (prog, args, data) for weighted indexing:
+    prog = command words (each pipeline stage), args = flags and plain words,
+    data = paths, hosts, quoted strings, file names and search-tool arguments."""
+    prog, args, data = [], [], []
+    expect_cmd, tool = True, ""
+    for t in TOKEN.findall(cmd):
+        if t in CMD_SEP:
+            expect_cmd = True
+            continue
+        if expect_cmd:
+            if ASSIGN.match(t) or t in PREFIX or t.startswith("-"):
+                args.append(t)
+                continue
+            prog.append(t)
+            tool, expect_cmd = os.path.basename(t), False
+            continue
+        u = unquote(t)
+        if tool in SEARCH_TOOLS or u != t or "/" in u or "<" in token_shape(u):
+            data.append(t)
+        else:
+            args.append(t)
+    return " ".join(prog), " ".join(args), " ".join(data)
 
 
 def first_word(cmd):
@@ -366,8 +463,12 @@ def expand(srcs):
     return files
 
 
+# Bump when the index layout or cleaning rules change, so existing DBs rebuild.
+SCHEMA_VERSION = "3"
+
+
 def fingerprint(files):
-    h = hashlib.sha1()
+    h = hashlib.sha1(f"schema {SCHEMA_VERSION}\n".encode())
     for kind, p in files:
         try:
             st = os.stat(p)
@@ -426,96 +527,229 @@ def build(files):
                 continue
         ranked = sorted(variants.items(), key=lambda kv: (kv[1][1], kv[1][0]), reverse=True)
         best = ranked[0][0]
-        others = [c for c, _ in sorted(ranked[1:], key=lambda kv: kv[1][0], reverse=True)[:2]]
+        by_count = [c for c, _ in sorted(ranked[1:], key=lambda kv: kv[1][0], reverse=True)]
+        display = template([best] + by_count)
+        # Templated rows show real examples (most recent first); plain rows
+        # show up to 2 other variants.
+        examples = [best] + by_count[:1] if display != best else by_count[:2]
         kind = "history" if g["kinds"] == {"history"} else "note"
-        rows.append((best, " | ".join(others), "; ".join(g["notes"])[:500],
-                     count, max(v[1] for v in variants.values()), kind))
+        prog, args, data = split_cmd(best)
+        cmdword = os.path.basename(prog.split()[0]) if prog else ""
+        # prog/args/data/variants/note are searched (with different weights);
+        # display is UNINDEXED so placeholder words like "host" never match.
+        rows.append((prog, args, data, " | ".join(examples), "; ".join(g["notes"])[:500],
+                     display, cmdword, count, max(v[1] for v in variants.values()), kind))
 
-    os.makedirs(os.path.dirname(DB), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(DB), suffix=".tmp")
-    os.close(fd)
-    try:
-        con = sqlite3.connect(tmp)
-        con.executescript("""
-            CREATE VIRTUAL TABLE entries USING fts5(
-              cmd, variants, note,
-              count UNINDEXED, recency UNINDEXED, kind UNINDEXED,
-              tokenize = 'porter unicode61');
-            CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
-        """)
-        con.executemany("INSERT INTO entries VALUES (?,?,?,?,?,?)", rows)
-        con.execute("INSERT INTO meta VALUES ('fingerprint', ?)", (fingerprint(files),))
-        con.commit()
-        con.close()
-        os.replace(tmp, DB)
-    except BaseException:
-        os.unlink(tmp)
-        raise
+    write_db(DB, """
+        CREATE VIRTUAL TABLE entries USING fts5(
+          prog, args, data, variants, note,
+          display UNINDEXED, cmdword UNINDEXED,
+          count UNINDEXED, recency UNINDEXED, kind UNINDEXED,
+          tokenize = 'porter unicode61');
+        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
     return len(rows)
 
 
-def stored_fingerprint():
-    if not os.path.exists(DB):
+def write_db(path, schema, insert, rows, fp):
+    """Build a DB in a temp file next to `path`, then atomically replace it."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    os.close(fd)
+    try:
+        con = sqlite3.connect(tmp)
+        con.executescript(schema + "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);")
+        con.executemany(insert, rows)
+        con.execute("INSERT INTO meta VALUES ('fingerprint', ?)", (fp,))
+        con.commit()
+        con.close()
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+def stored_fingerprint(path):
+    if not os.path.exists(path):
         return None
     try:
-        con = sqlite3.connect(DB)
+        con = sqlite3.connect(path)
         row = con.execute("SELECT value FROM meta WHERE key='fingerprint'").fetchone()
         con.close()
         return row[0] if row else None
     except sqlite3.Error:
         return None
 
+# ---------------------------------------------------------------- man pages
+# NAME lines of all installed section 1/8 pages, from `apropos .` (man-db's
+# index), in a separate DB that is rebuilt only when man-db's index changes.
+
+MANDB = os.environ.get("HINTDB_MANDB", os.path.join(os.path.dirname(DB), "man.db"))
+APROPOS_CMD = os.environ.get("HINTDB_APROPOS", "apropos .")   # override for testing
+APROPOS_LINE = re.compile(r"^(.+?)\s+\(([^)]+)\)\s+-\s+(.*)$")
+
+
+def man_enabled():
+    return os.environ.get("HINTDB_NO_MAN") is None and (
+        "HINTDB_APROPOS" in os.environ or shutil.which("apropos") is not None)
+
+
+def man_fingerprint():
+    """man-db rewrites its index.* files when mandb runs (pacman hook / daily
+    timer). Without them, fall back to rebuilding once a day."""
+    files = sorted(glob.glob("/var/cache/man/**/index.*", recursive=True))
+    if not files:
+        return f"schema {SCHEMA_VERSION} day-" + time.strftime("%Y%m%d")
+    h = hashlib.sha1(f"schema {SCHEMA_VERSION}\n{APROPOS_CMD}".encode())
+    for p in files:
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        h.update(f"{p}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
+    return h.hexdigest()
+
+
+def build_man():
+    try:
+        out = subprocess.run(shlex.split(APROPOS_CMD), capture_output=True, text=True,
+                             timeout=120).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"hintdb: man index skipped: {e}", file=sys.stderr)
+        return 0
+    pages = {}
+    for line in out.splitlines():
+        m = APROPOS_LINE.match(line.strip())
+        if not m:
+            continue
+        names, sec, desc = m.groups()
+        # Commands only: sections 1 and 8 (incl. 1ssl etc.), not POSIX 1p copies.
+        if sec[:1] not in "18" or sec.endswith("p"):
+            continue
+        for name in names.split(","):
+            name = name.strip()
+            if name and name not in pages:
+                pages[name] = (name, desc.strip(), sec)
+    write_db(MANDB, """
+        CREATE VIRTUAL TABLE pages USING fts5(
+          name, desc, section UNINDEXED, tokenize = 'porter unicode61');
+        """, "INSERT INTO pages VALUES (?,?,?)", list(pages.values()), man_fingerprint())
+    return len(pages)
+
 
 def update(force=False):
+    """Rebuild whichever index is stale. Returns (entries, pages); None = unchanged."""
     files = expand(load_sources())
-    if force or stored_fingerprint() != fingerprint(files):
-        return build(files)
-    return None
+    n = m = None
+    if force or stored_fingerprint(DB) != fingerprint(files):
+        n = build(files)
+    if man_enabled() and (force or stored_fingerprint(MANDB) != man_fingerprint()):
+        m = build_man()
+    return n, m
 
 # ---------------------------------------------------------------- query
 
 
-def fts_query(text):
+def query_terms(text):
     terms = []
     for t in re.findall(r"[\w./-]+", text.lower()):
         t = t.strip("./-")
-        if len(t) < 2 or t in STOP:
-            continue
-        terms.append('"%s"' % t.replace('"', '""'))
-    return " OR ".join(dict.fromkeys(terms))
+        if len(t) >= 2 and t not in STOP:
+            terms.append(t)
+    return list(dict.fromkeys(terms))
+
+
+def coverage(terms, text):
+    """Fraction of query terms present in text (crude stemming by prefix)."""
+    toks = set(re.findall(r"[a-z0-9]+", text.lower()))
+    hit = 0
+    for t in terms:
+        parts = re.findall(r"[a-z0-9]+", t)
+        if parts and all(any(k.startswith(p[:max(3, len(p) - 2)]) for k in toks) for p in parts):
+            hit += 1
+    return hit / len(terms)
+
+
+ENTRY_COLS = "display, variants, note, count, recency, kind, cmdword"
+# bm25 column weights: prog, args, data, variants, note
+ENTRY_BM25 = "bm25(entries, 4.0, 1.0, 0.2, 0.2, 2.0)"
+MAN_HITS = 5        # man pages per query
+MAN_EXPAND = 3      # user's own rows pulled in per man page
+MAN_MIN_COVERAGE = 0.5   # a man hit must match at least half the query terms
 
 
 def query(text, n):
-    q = fts_query(text)
-    if not q or not os.path.exists(DB):
+    """Two-stage: FTS over the user's entries and over man NAME lines; then each
+    man hit pulls in the user's own rows for that command. Ordered by how many
+    query terms a row covers (command word, args and notes only, so a term
+    that appears only in a grep pattern or path counts for less), then user's
+    rows before man rows, then score."""
+    terms = query_terms(text)
+    if not terms or not os.path.exists(DB):
         return []
+    q = " OR ".join('"%s"' % t.replace('"', '""') for t in terms)
     con = sqlite3.connect(DB)
+    cands = []
     try:
-        rows = con.execute(
-            "SELECT cmd, variants, note, count, recency, kind, bm25(entries, 1.0, 0.5, 2.0) "
-            "FROM entries WHERE entries MATCH ? ORDER BY bm25(entries, 1.0, 0.5, 2.0) LIMIT ?",
-            (q, max(n * 4, 40))).fetchall()
+        for r in con.execute(
+                f"SELECT {ENTRY_COLS}, prog || ' ' || args || ' ' || note, {ENTRY_BM25} "
+                f"FROM entries WHERE entries MATCH ? ORDER BY {ENTRY_BM25} LIMIT ?",
+                (q, max(n * 4, 40))):
+            entry, covtext, bm = r[:7], r[7], r[8]
+            count, recency, kind = entry[3], entry[4], entry[5]
+            score = bm - 0.3 * math.log(count) - 0.5 * recency - (0.3 if kind == "note" else 0)
+            cands.append((-coverage(terms, covtext), 0, score, "entry", entry))
+        if os.path.exists(MANDB):
+            con.execute("ATTACH DATABASE ? AS man", (MANDB,))
+            for name, desc, sec, bm in con.execute(
+                    "SELECT name, desc, section, bm25(pages, 2.0, 1.0) FROM man.pages "
+                    "WHERE pages MATCH ? ORDER BY bm25(pages, 2.0, 1.0) LIMIT ?", (q, MAN_HITS)):
+                cov = coverage(terms, name + " " + desc)
+                if cov >= MAN_MIN_COVERAGE:
+                    cands.append((-cov, 1, bm, "man", (name, desc, sec)))
+        cands.sort(key=lambda c: c[:3])
+
+        out, seen = [], set()
+
+        def emit(entry):
+            if entry[0] not in seen and len(out) < n:
+                seen.add(entry[0])
+                out.append(fmt(entry))
+
+        for *_, typ, row in cands:
+            if len(out) >= n:
+                break
+            if typ == "entry":
+                emit(row)
+                continue
+            name, desc, sec = row
+            out.append(f"{name}  # {desc}  [man {name}({sec})]")
+            for e in con.execute(f"SELECT {ENTRY_COLS} FROM entries WHERE cmdword = ? "
+                                 "ORDER BY count DESC LIMIT ?", (name, MAN_EXPAND)):
+                emit(e)
     finally:
         con.close()
-
-    def score(r):
-        _, _, _, count, recency, kind, bm = r
-        return bm - 0.3 * math.log(count) - 0.5 * recency - (0.3 if kind == "note" else 0)
-
-    return sorted(rows, key=score)[:n]
+    return out
 
 
-def fmt(row):
-    cmd, variants, note, count, _, _, _ = row
-    line = cmd + (f"  # {note}" if note else "")
+def fmt(entry):
+    display, variants, note, count = entry[:4]
+    line = display + (f"  # {note}" if note else "")
     extra = []
     if count > 1:
         extra.append(f"x{count}")
     if variants:
-        extra.append("also: " + variants)
+        extra.append(("e.g.: " if "<" in display else "also: ") + variants)
     return line + (f"  [{'; '.join(extra)}]" if extra else "")
 
 # ---------------------------------------------------------------- cli
+
+
+def report(res):
+    n, m = res
+    parts = [f"{n} entries" if n is not None else "entries up to date"]
+    if man_enabled():
+        parts.append(f"{m} man pages" if m is not None else "man pages up to date")
+    print("hintdb: " + ", ".join(parts))
 
 
 def main():
@@ -549,15 +783,15 @@ def main():
         else:
             srcs = [(k, sp) for k, sp in srcs if sp not in paths]
         save_sources(srcs)
-        print(f"hintdb: {update(force=True)} entries")
+        files = expand(srcs)
+        print(f"hintdb: {build(files)} entries")
     elif args.op == "sources":
         for kind, path in load_sources():
             print(f"{kind}\t{path}")
     elif args.op == "rebuild":
-        print(f"hintdb: {update(force=True)} entries")
+        report(update(force=True))
     elif args.op == "update":
-        n = update()
-        print("hintdb: up to date" if n is None else f"hintdb: {n} entries")
+        report(update())
     elif args.op == "stats":
         update()
         con = sqlite3.connect(DB)
@@ -565,11 +799,15 @@ def main():
                 "SELECT kind, COUNT(*), SUM(count) FROM entries GROUP BY kind"):
             print(f"{kind}\t{c} entries from {s} raw lines")
         con.close()
+        if os.path.exists(MANDB):
+            con = sqlite3.connect(MANDB)
+            print(f"man\t{con.execute('SELECT COUNT(*) FROM pages').fetchone()[0]} pages")
+            con.close()
     elif args.op == "query":
         if not args.no_update:
             update()
-        for row in query(" ".join(args.words), args.n):
-            print(fmt(row))
+        for line in query(" ".join(args.words), args.n):
+            print(line)
 
 
 if __name__ == "__main__":
