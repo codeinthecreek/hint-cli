@@ -23,6 +23,7 @@ separate man.db, rebuilt only when man-db's index changes. A query matching
 import argparse
 import glob
 import hashlib
+import json
 import math
 import os
 import re
@@ -468,7 +469,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 
 
 def fingerprint(files):
@@ -508,11 +509,13 @@ def build(files):
             e[1] = max(e[1], recency)
             if kind != "history":
                 e[2] = kind
-            g = groups.setdefault(shape(cmd), {"variants": {}, "notes": [], "kinds": set()})
+            g = groups.setdefault(shape(cmd), {"variants": {}, "notes": [], "vnotes": {},
+                                               "kinds": set()})
             g["variants"][cmd] = e
             g["kinds"].add(kind)
             if note:
-                add_note(g["notes"], note)
+                add_note(g["notes"], note)                        # searched
+                add_note(g["vnotes"].setdefault(cmd, []), note)   # shown per variant
 
     which_cache = {}
 
@@ -538,21 +541,34 @@ def build(files):
         # Templated rows show real examples (most recent first); plain rows
         # show up to 2 other variants.
         examples = [best] + by_count[:1] if display != best else by_count[:2]
-        kind = "history" if g["kinds"] == {"history"} else "note"
+        kind = "history" if "history" in g["kinds"] else "note"
         prog, args, data = split_cmd(best)
         cmdword = os.path.basename(prog.split()[0]) if prog else ""
         # prog/args/data/variants/note are searched (with different weights);
         # display is UNINDEXED so placeholder words like "host" never match.
+        vnotes = g["vnotes"]
+        # A note describes the whole row only if variants carrying it account
+        # for at least half the uses; otherwise it stays with its own variant.
+        weight = {}
+        for c, ns in vnotes.items():
+            for nt in ns:
+                weight[nt] = weight.get(nt, 0) + variants[c][0]
+        majority = [nt for nt, w in weight.items() if w * 2 >= count]
+        dnote = "; ".join(majority)
+        shown = [[c, "; ".join(n for n in vnotes.get(c, []) if n not in majority)]
+                 for c in examples]
         rows.append((prog, args, data, " | ".join(examples), "; ".join(g["notes"])[:500],
-                     display, cmdword, shp, count, max(v[1] for v in variants.values()), kind))
+                     display, dnote[:300], json.dumps(shown), cmdword, shp, count,
+                     max(v[1] for v in variants.values()), kind))
 
     write_db(DB, """
         CREATE VIRTUAL TABLE entries USING fts5(
           prog, args, data, variants, note,
-          display UNINDEXED, cmdword UNINDEXED, shape UNINDEXED,
+          display UNINDEXED, dnote UNINDEXED, examples UNINDEXED,
+          cmdword UNINDEXED, shape UNINDEXED,
           count UNINDEXED, recency UNINDEXED, kind UNINDEXED,
           tokenize = 'porter unicode61');
-        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
+        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
     return len(rows)
 
 
@@ -675,7 +691,7 @@ def coverage(terms, text):
     return hit / len(terms)
 
 
-ENTRY_COLS = "display, variants, note, count, recency, kind, cmdword"
+ENTRY_COLS = "display, examples, dnote, count, recency, kind, cmdword"
 # bm25 column weights: prog, args, data, variants, note
 ENTRY_BM25 = "bm25(entries, 4.0, 1.0, 0.2, 0.2, 2.0)"
 MAN_HITS = 5        # man pages per query
@@ -737,14 +753,21 @@ def query(text, n):
     return out
 
 
+def fmt_example(ex):
+    cmd, note = ex
+    return cmd + (f"  # {note}" if note else "")
+
+
 def fmt(entry):
-    display, variants, note, count = entry[:4]
-    line = display + (f"  # {note}" if note else "")
+    display, examples, dnote, count = entry[:4]
+    line = display + (f"  # {dnote}" if dnote else "")
     extra = []
     if count > 1:
         extra.append(f"x{count}")
-    if variants:
-        extra.append(("e.g.: " if "<" in display else "also: ") + variants)
+    examples = json.loads(examples) if examples else []
+    if examples:
+        extra.append(("e.g.: " if "<" in display else "also: ")
+                     + " | ".join(fmt_example(e) for e in examples))
     return line + (f"  [{'; '.join(extra)}]" if extra else "")
 
 # ---------------------------------------------------------------- match
@@ -773,10 +796,41 @@ def man_summary(con, tool):
     return row[0] if row else None
 
 
-def match(guesses):
-    """For each guess: the user's closest row if overlap >= MATCH_MIN,
-    otherwise the guess itself. Two lines per result: command, then status."""
+def match(guesses, debug=False):
+    """For each guess: the user's closest row for the same tool if its overlap
+    is >= MATCH_MIN; if that overlap is below 1.0 the guess is printed after it
+    as well. No match: the guess alone. Two lines per result: command, status.
+    debug: print each guess's shape and top-scoring candidates to stderr."""
     out, shown = [], set()
+
+    def dbg(msg):
+        if debug:
+            print("hintdb: " + msg, file=sys.stderr)
+
+    def add_row(display, examples, note, count, kind):
+        if display in shown:
+            return
+        shown.add(display)
+        src = f"your history x{count}" if kind == "history" else "your notes"
+        status = src + (f": {note}" if note else "")
+        examples = json.loads(examples) if examples else []
+        if "<" in display and examples:
+            status += "; e.g. " + fmt_example(examples[0])
+        out.extend([display, "  # " + status])
+
+    def add_guess(guess, tool, has_rows):
+        if guess in shown:
+            return
+        shown.add(guess)
+        summary = man_summary(con, tool) if tool else None
+        if summary:
+            status = f"model suggestion ({tool}: {summary})"
+        elif tool and not has_rows and not shutil.which(tool):
+            status = f"model suggestion; {tool} not installed"
+        else:
+            status = "model suggestion"
+        out.extend([guess, "  # " + status])
+
     con = sqlite3.connect(DB) if os.path.exists(DB) else sqlite3.connect(":memory:")
     try:
         for guess in guesses:
@@ -786,37 +840,32 @@ def match(guesses):
             prog = split_cmd(guess)[0]
             tool = os.path.basename(prog.split()[0]) if prog else ""
             gshape = shape(guess)
-            best = None
+            cands = []
             if tool and os.path.exists(DB):
                 for display, examples, note, shp, count, kind in con.execute(
-                        "SELECT display, variants, note, shape, count, kind FROM entries "
+                        "SELECT display, examples, dnote, shape, count, kind FROM entries "
                         "WHERE cmdword = ?", (tool,)):
-                    score = overlap(gshape, shp)
-                    key = (score, count)
-                    if best is None or key > best[0]:
-                        best = (key, display, examples, note, count, kind)
-            if best and best[0][0] >= MATCH_MIN:
-                _, display, examples, note, count, kind = best
-                if display in shown:
-                    continue
-                shown.add(display)
-                src = f"your history x{count}" if kind == "history" else "your notes"
-                status = src + (f": {note}" if note else "")
-                if "<" in display and examples:
-                    status += "; e.g. " + examples.split(" | ")[0]
-                out += [display, "  # " + status]
+                    cands.append((overlap(gshape, shp), count, shp,
+                                  (display, examples, note, count, kind)))
+            cands.sort(key=lambda c: (c[0], c[1]), reverse=True)
+
+            dbg(f"guess: {guess}")
+            dbg(f"  shape: {gshape}")
+            dbg(f"  {len(cands)} rows for tool '{tool}'" + (", top:" if cands else ""))
+            for score, count, shp, _ in cands[:5]:
+                dbg(f"    {score:.2f}  x{count:<5} {shp}")
+
+            if cands and cands[0][0] >= MATCH_MIN:
+                score = cands[0][0]
+                add_row(*cands[0][3])
+                if score < 1.0:
+                    add_guess(guess, tool, True)
+                dbg(f"  -> {'exact' if score >= 1.0 else 'partial'} match "
+                    f"({score:.2f} >= {MATCH_MIN})" + ("" if score >= 1.0 else "; guess shown too"))
             else:
-                if guess in shown:
-                    continue
-                shown.add(guess)
-                summary = man_summary(con, tool) if tool else None
-                if summary:
-                    status = f"model suggestion ({tool}: {summary})"
-                elif tool and not shutil.which(tool):
-                    status = f"model suggestion; {tool} not installed"
-                else:
-                    status = "model suggestion"
-                out += [guess, "  # " + status]
+                add_guess(guess, tool, bool(cands))
+                dbg(f"  -> no match (best {cands[0][0]:.2f} < {MATCH_MIN})" if cands
+                    else "  -> no match (no rows)")
     finally:
         con.close()
     return out
@@ -847,6 +896,7 @@ def main():
     sub.add_parser("stats")
     mt = sub.add_parser("match")
     mt.add_argument("--no-update", action="store_true")
+    mt.add_argument("--debug", action="store_true", help="scores to stderr")
     mt.add_argument("guesses", nargs="*", help="guessed commands; read from stdin if none")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
@@ -890,7 +940,7 @@ def main():
         if not args.no_update:
             update()
         guesses = args.guesses or [ln for ln in sys.stdin.read().splitlines()]
-        for line in match(guesses):
+        for line in match(guesses, args.debug):
             print(line)
     elif args.op == "query":
         if not args.no_update:
