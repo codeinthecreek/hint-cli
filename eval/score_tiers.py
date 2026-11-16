@@ -7,7 +7,11 @@ the strictest one it satisfies. Levels (strict -> loose), reported cumulatively:
 
   exact        identical string
   normalized   same tokens after: leading `sudo` dropped, quotes removed (shlex),
-               whitespace collapsed; a <placeholder> token matches any one token
+               whitespace collapsed; a <placeholder> stands for one or more characters
+               of one token (text around it must match), never for a flag; when
+               both tokens have placeholders, never for text with a `:`. Flags
+               (with or without a value) may be in any order; other words must
+               be in the same order. Compared per `|`, `&&`, `;` segment.
   cmd+flags    same command key and flag-set Jaccard >= 0.5 (both empty counts as 1)
   cmd          same command key (executable + subcommand), any arguments
 
@@ -51,8 +55,96 @@ def normalized(line):
     return strip_sudo(tokens(line.strip()))
 
 
+def ph_match(pat, tok, any_char=".+"):
+    """True if token `pat` (containing <placeholders>) matches token `tok`: the text
+    around the placeholders must be equal, each placeholder stands for one or more
+    characters, and a placeholder never stands for a flag (a leading `-`)."""
+    if tok.startswith("-") and not pat.startswith("-"):
+        return False
+    rx = any_char.join(re.escape(p) for p in PH.split(pat))
+    return re.fullmatch(rx, tok) is not None
+
+
 def tok_eq(a, b):
-    return a == b or is_ph(a) or is_ph(b)
+    if a == b:
+        return True
+    if is_ph(a) and is_ph(b):
+        # Both are placeholders: one never stands for text with a `:`, so
+        # <PATH> is not <USER@HOST>:<PATH> (rsync/scp push vs pull).
+        return ph_match(a, b, "[^:]+") or ph_match(b, a, "[^:]+")
+    return (is_ph(a) and ph_match(a, b)) or (is_ph(b) and ph_match(b, a))
+
+
+SEPS = {"|", "||", "&&", ";"}
+
+
+def is_flag(tok):
+    return tok.startswith("-") and len(tok) > 1
+
+
+def segments(t):
+    out = [[]]
+    for tok in t:
+        if tok in SEPS:
+            out.append([])
+        else:
+            out[-1].append(tok)
+    return out
+
+
+def readings(seg):
+    """Every way to read a command: each flag followed by a non-flag word either takes
+    it as its value or takes nothing. Yields (other words in order, flag groups)."""
+    end = seg.index("--") if "--" in seg else len(seg)
+    can = [i for i in range(end - 1) if is_flag(seg[i]) and not is_flag(seg[i + 1])]
+    if len(can) > 8:                       # keep the search small
+        can = []
+    for mask in range(1 << len(can)):
+        takes = {can[j] for j in range(len(can)) if mask >> j & 1}
+        pos, flags, i = [], [], 0
+        while i < len(seg):
+            tok = seg[i]
+            if i < end and is_flag(tok):
+                if i in takes:
+                    flags.append((tok, seg[i + 1]))
+                    i += 2
+                    continue
+                flags.append((tok,))
+            else:
+                pos.append(tok)
+            i += 1
+        yield pos, flags
+
+
+def seq_eq(a, b):
+    return len(a) == len(b) and all(tok_eq(x, y) for x, y in zip(a, b))
+
+
+def bag_eq(a, b):
+    if len(a) != len(b):
+        return False
+    if not a:
+        return True
+    for j, y in enumerate(b):
+        if seq_eq(a[0], y) and bag_eq(a[1:], b[:j] + b[j + 1:]):
+            return True
+    return False
+
+
+def seg_eq(x, y):
+    ry = list(readings(y))
+    return any(seq_eq(px, py) and bag_eq(fx, fy)
+               for px, fx in readings(x) for py, fy in ry)
+
+
+def same_args(line, e):
+    """Same command after normalizing: other words in the same order, flags (with
+    or without a value) in any order, compared per pipeline/list segment."""
+    ln, en = normalized(line), normalized(e)
+    if not ln:
+        return False
+    a, b = segments(ln), segments(en)
+    return len(a) == len(b) and all(seg_eq(x, y) for x, y in zip(a, b))
 
 
 def first_segment(line):
@@ -97,8 +189,7 @@ def level(line, expected):
         if line == e:
             lv = 0
         else:
-            ln, en = normalized(line), normalized(e)
-            if ln and len(ln) == len(en) and all(tok_eq(x, y) for x, y in zip(ln, en)):
+            if same_args(line, e):
                 lv = 1
             else:
                 lk, lf = key_and_flags(line)

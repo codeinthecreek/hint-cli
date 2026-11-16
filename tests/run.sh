@@ -64,6 +64,42 @@ else
   ok "code is ASCII only"
 fi
 
+echo "== eval scoring"
+# A <placeholder> stands for a value: the text around it must match, and it
+# never stands for a flag. When both tokens have placeholders, it never stands
+# for text with a `:` (push vs pull). Flags, with or without a value, may be in
+# any order; other words must keep their order. Prints each case that scores wrong.
+out=$(python3 - "$root/eval" <<'EOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import score_tiers as st
+cases = [  # printed line, expected line, hit (normalized level or better)?
+    ("ssh root@example.org", "ssh <user>@<host>", True),
+    ("ssh root@example.org", "ssh user@<host>", False),
+    ("ping -c 3 192.0.2.1", "ping -c <n> <host>", True),
+    ("tar -xf <FILE> -C <PATH>", "tar -xf <archive> -C <dir>", True),
+    ("unzip <FILE> -d <PATH>", "unzip -d <PATH> <ARCHIVE>", True),
+    ("tar -xf <FILE> -C <PATH>", "tar -C <dir> -xf <archive>", True),
+    ("cp -r a b", "cp a -r b", True),
+    ("cp a b", "cp b a", False),
+    ("rsync -av --delete <PATH> <USER@HOST>:<PATH>", "rsync --delete -av <PATH> <USER@HOST>:<PATH>", True),
+    ("rsync -av --delete <PATH> <USER@HOST>:<PATH>", "rsync --delete -av <USER@HOST>:<PATH> <PATH>", False),
+    ("ls -l | grep x", "ls | grep -l x", False),
+    ("kubectl delete pods --all", "kubectl delete pods <name>", False),
+    ("rsync -av <PATH> <USER@HOST>:<PATH>", "rsync -av <USER@HOST>:<PATH> <PATH>", False),
+    ("scp <FILE> <USER@HOST>:<PATH>", "scp <USER@HOST>:<PATH> <FILE>", False),
+    ("ssh <USER@HOST>", "ssh <USER>@<HOST>", True),
+    ("glow -p <PATH>", "glow -p <FILE>.md", True),
+    ("curl https://example.org/api", "curl <url>", True),
+]
+for line, exp, want in cases:
+    lv = st.level(line, [exp])
+    if (lv is not None and lv <= 1) != want:
+        print(f"{line!r} vs {exp!r}: level {lv}, want hit={want}")
+EOF
+)
+if [ -z "$out" ]; then ok "eval scoring: placeholders and flag order"; else bad "eval scoring: placeholders and flag order" "$out"; fi
+
 echo "== index"
 out=$(hintdb add "$fix/notes" 2>&1)
 has "build from history and notes" "$out" "entries"
@@ -88,6 +124,10 @@ has "varying quoted strings become <STR>, not bare words" "$idx" \
 has "python -m module name is not a host" "$idx" "python3 -m http.server 8000		x2"
 has "flags kept as written: +short is its own row" "$idx" "dig +short <HOST>		x3"
 has "note on a minority variant stays off the row" "$idx" "mkdir <PATH>		x6"
+has "trailing / kept in a merged row" "$idx" \
+  "rsync -e \"ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes\" --archive --delete <USER@HOST>:<PATH>/ /home/user/backup/<PATH>/	trailing / on source copies its contents	x2"
+has "path with trailing / is its own row" "$idx" "du -sh /srv/current/		x1"
+has "same path without trailing / is its own row" "$idx" "du -sh /srv/current		x1"
 has "note on a single-variant row is shown" "$idx" \
   "ssh -N -L 5432:localhost:5432 db.example.org	tunnel to postgres	x1"
 has "markdown: heading and comment become the note" "$idx" \
@@ -190,6 +230,9 @@ out=$(hintdb match "nslookup example.com" "dig +short example.com" 2>&1)
 line "user's row from a later guess comes before an earlier model suggestion" "$out" 1 \
   "dig +short <HOST>"
 line "model suggestion follows the user's rows" "$out" 3 "nslookup example.com"
+
+out=$(hintdb match "du -sh /tmp/x/" 2>&1)
+line "a guess with trailing / prefers the row with trailing /" "$out" 1 "du -sh /srv/current/"
 
 out=$(hintdb match "ssh-keygen -f ~/.ssh/known_hosts" 2>&1)
 has "case 1: several matching rows of the tool are shown" "$out" "ssh-keygen -l -f /home/user/.ssh/<PATH>"
