@@ -1,0 +1,10 @@
+# example-queries.tsv - format example only; keep your real query file outside the repo.
+# query <TAB> expected line [<TAB> another accepted line ...]
+# <placeholders> in an expected line match any one token.
+# not-installed: <command>  = the tool is not installed here; hint should list the
+#                             command as "# found in <source>, but <tool> is not installed here:"
+remove an old host key for buildhost	ssh-keygen -f "$HOME/.ssh/known_hosts" -R <host>
+list listening ports with process	ss -tulpn
+show today's logs	journalctl --since=today
+list pods in all namespaces	kubectl get pods -A	kubectl get pods --all-namespaces
+check state of cluster nodes	not-installed: sinfo -Nel

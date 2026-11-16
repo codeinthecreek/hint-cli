@@ -55,8 +55,11 @@ bash -n "$root/hint" && ok "hint parses" || bad "hint parses"
 for f in hint hintdb; do
   [ -x "$root/$f" ] && ok "$f is executable" || bad "$f is executable" "chmod +x $f"
 done
-if grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py >/dev/null; then
-  bad "code is ASCII only" "$(grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py)"
+for f in "$root"/eval/*.py; do
+  python3 -m py_compile "$f" && ok "$(basename "$f") compiles" || bad "$(basename "$f") compiles"
+done
+if grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/* >/dev/null; then
+  bad "code is ASCII only" "$(grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/*)"
 else
   ok "code is ASCII only"
 fi

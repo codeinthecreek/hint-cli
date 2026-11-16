@@ -161,6 +161,9 @@ The suite uses synthetic fixtures in `tests/fixtures` and a stub Ollama
 server, so it needs no model and never touches your index or history.
 Requires python3 (with FTS5), curl and jq.
 
+To measure hint on your own queries with a real model, see
+[eval/README.md](eval/README.md).
+
 ## Limitations
 
 - Hosts without a dot (`ssh myserver`) aren't recognised as hosts, so each one
