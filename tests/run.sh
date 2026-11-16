@@ -96,6 +96,17 @@ lacks "markdown: non-shell fence skipped" "$idx" "apiVersion"
 has "justfile: recipe name and doc comment as note" "$idx" \
   "terraform destroy -auto-approve	just rebuild; rebuild the cluster from scratch"
 
+src=$(python3 - "$HINTDB_DB" <<'EOF2'
+import json, os, sqlite3, sys
+for display, sources in sqlite3.connect(sys.argv[1]).execute(
+        "SELECT display, sources FROM entries"):
+    print(display + "\t" + " ".join(os.path.basename(p) for p in json.loads(sources)))
+EOF2
+)
+has "source: a notes row records its notes file" "$src" "kubectl cordon node1	k8s.md"
+has "source: a history row records the history file" "$src" "dig +short <HOST>	history"
+has "source: a row from history and notes records both" "$src" "kubectl get nodes	history k8s.md"
+
 out=$(hintdb update)
 has "no rebuild when nothing changed" "$out" "entries up to date"
 

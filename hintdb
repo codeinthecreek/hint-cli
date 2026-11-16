@@ -471,7 +471,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "7"
+SCHEMA_VERSION = "8"
 
 
 def fingerprint(files):
@@ -512,9 +512,10 @@ def build(files):
             if kind != "history":
                 e[2] = kind
             g = groups.setdefault(shape(cmd), {"variants": {}, "notes": [], "vnotes": {},
-                                               "kinds": set()})
+                                               "kinds": set(), "sources": set()})
             g["variants"][cmd] = e
             g["kinds"].add(kind)
+            g["sources"].add(path)   # for "found in <source>"
             if note:
                 add_note(g["notes"], note)                        # searched
                 add_note(g["vnotes"].setdefault(cmd, []), note)   # shown per variant
@@ -561,16 +562,17 @@ def build(files):
                  for c in examples]
         rows.append((prog, args, data, " | ".join(examples), "; ".join(g["notes"])[:500],
                      display, dnote[:300], json.dumps(shown), cmdword, shp, count,
-                     max(v[1] for v in variants.values()), kind))
+                     max(v[1] for v in variants.values()), kind,
+                     json.dumps(sorted(g["sources"]))))
 
     write_db(DB, """
         CREATE VIRTUAL TABLE entries USING fts5(
           prog, args, data, variants, note,
           display UNINDEXED, dnote UNINDEXED, examples UNINDEXED,
           cmdword UNINDEXED, shape UNINDEXED,
-          count UNINDEXED, recency UNINDEXED, kind UNINDEXED,
+          count UNINDEXED, recency UNINDEXED, kind UNINDEXED, sources UNINDEXED,
           tokenize = 'porter unicode61');
-        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
+        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
     return len(rows)
 
 

@@ -253,6 +253,7 @@ Data flow from sources to the printed answer, traced with the example query
           dnote        notes carried by >= half the uses
           note         all notes (search only)
           cmdword      ssh
+          sources      files the row came from (for "found in <source>")
           prog/args/data   weighted FTS columns (hintdb query only)
           |
           v
