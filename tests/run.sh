@@ -67,7 +67,8 @@ fi
 echo "== eval scoring"
 # A <placeholder> stands for a value: the text around it must match, and it
 # never stands for a flag. When both tokens have placeholders, it never stands
-# for text with a `:` (push vs pull). Prints each case that scores wrong.
+# for text with a `:` (push vs pull). Flags, with or without a value, may be in
+# any order; other words must keep their order. Prints each case that scores wrong.
 out=$(python3 - "$root/eval" <<'EOF'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -77,7 +78,13 @@ cases = [  # printed line, expected line, hit (normalized level or better)?
     ("ssh root@example.org", "ssh user@<host>", False),
     ("ping -c 3 192.0.2.1", "ping -c <n> <host>", True),
     ("tar -xf <FILE> -C <PATH>", "tar -xf <archive> -C <dir>", True),
-    ("unzip <FILE> -d <PATH>", "unzip -d <PATH> <ARCHIVE>", False),
+    ("unzip <FILE> -d <PATH>", "unzip -d <PATH> <ARCHIVE>", True),
+    ("tar -xf <FILE> -C <PATH>", "tar -C <dir> -xf <archive>", True),
+    ("cp -r a b", "cp a -r b", True),
+    ("cp a b", "cp b a", False),
+    ("rsync -av --delete <PATH> <USER@HOST>:<PATH>", "rsync --delete -av <PATH> <USER@HOST>:<PATH>", True),
+    ("rsync -av --delete <PATH> <USER@HOST>:<PATH>", "rsync --delete -av <USER@HOST>:<PATH> <PATH>", False),
+    ("ls -l | grep x", "ls | grep -l x", False),
     ("kubectl delete pods --all", "kubectl delete pods <name>", False),
     ("rsync -av <PATH> <USER@HOST>:<PATH>", "rsync -av <USER@HOST>:<PATH> <PATH>", False),
     ("scp <FILE> <USER@HOST>:<PATH>", "scp <USER@HOST>:<PATH> <FILE>", False),
@@ -91,7 +98,7 @@ for line, exp, want in cases:
         print(f"{line!r} vs {exp!r}: level {lv}, want hit={want}")
 EOF
 )
-if [ -z "$out" ]; then ok "placeholder stands for a value, never a flag"; else bad "placeholder stands for a value, never a flag" "$out"; fi
+if [ -z "$out" ]; then ok "eval scoring: placeholders and flag order"; else bad "eval scoring: placeholders and flag order" "$out"; fi
 
 echo "== index"
 out=$(hintdb add "$fix/notes" 2>&1)
