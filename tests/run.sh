@@ -64,6 +64,29 @@ else
   ok "code is ASCII only"
 fi
 
+echo "== eval scoring"
+# A <placeholder> stands for a value: the text around it must match, and it
+# never stands for a flag. Prints each case that scores wrong.
+out=$(python3 - "$root/eval" <<'EOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import score_tiers as st
+cases = [  # printed line, expected line, hit (normalized level or better)?
+    ("ssh root@example.org", "ssh <user>@<host>", True),
+    ("ssh root@example.org", "ssh user@<host>", False),
+    ("ping -c 3 192.0.2.1", "ping -c <n> <host>", True),
+    ("tar -xf <FILE> -C <PATH>", "tar -xf <archive> -C <dir>", True),
+    ("unzip <FILE> -d <PATH>", "unzip -d <PATH> <ARCHIVE>", False),
+    ("kubectl delete pods --all", "kubectl delete pods <name>", False),
+]
+for line, exp, want in cases:
+    lv = st.level(line, [exp])
+    if (lv is not None and lv <= 1) != want:
+        print(f"{line!r} vs {exp!r}: level {lv}, want hit={want}")
+EOF
+)
+if [ -z "$out" ]; then ok "placeholder stands for a value, never a flag"; else bad "placeholder stands for a value, never a flag" "$out"; fi
+
 echo "== index"
 out=$(hintdb add "$fix/notes" 2>&1)
 has "build from history and notes" "$out" "entries"
