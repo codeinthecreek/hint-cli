@@ -59,7 +59,8 @@ BUILTINS = {
     "test", "times", "trap", "type", "typeset", "ulimit", "umask", "unalias",
     "unset", "wait", "for", "while", "if", "until", "case", "time", "[", "[[",
     "{", "(", "!", "function", "pushd", "popd", "dirs", "disown", "kill",
-    "suspend", "compgen", "complete", "fc",
+    "suspend", "compgen", "complete", "fc", "history", "cd", "pwd", "source", ".",
+    "jobs", "fg", "bg", "exit", "logout", "true", "false",
 }
 SECRET = re.compile(
     r"(?i)(passw(or)?d|passwd|secret|token|api[_-]?key|authorization:|bearer\s|"
@@ -471,7 +472,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "8"
+SCHEMA_VERSION = "9"
 
 
 def fingerprint(files):
@@ -829,6 +830,11 @@ def literal_words(shp):
     return {t for t in toks[1:] if t[0] not in "-+" and "<" not in t and t not in CMD_SEP}
 
 
+def installed(tool):
+    """Installed here: on PATH or a shell builtin (or an explicit path)."""
+    return tool in BUILTINS or shutil.which(tool) is not None
+
+
 def match(guesses, debug=False):
     """Case 1: the user's rows for the guessed tool whose overlap is
     >= MATCH_MIN, best first (extra rows must keep the guess's words; rows that
@@ -838,15 +844,20 @@ def match(guesses, debug=False):
     Case 2: no matching row: the guess alone. Two lines per result: command,
     status. The user's rows come before all model suggestions, so a wrong first
     guess cannot push the user's command down.
+    Installed only: a tool that is not on PATH (and not a shell builtin) is
+    never printed as a command. Its rows are listed as comments with their
+    source; uninstalled guesses are listed only if nothing else was printed.
     debug: print each guess's shape and top-scoring candidates to stderr."""
     mine, theirs, shown = [], [], set()
     per_guess = []   # matching rows of each guess, best first, one per group
+    missing = {}     # uninstalled tool -> {"rows": [display], "sources": set()}
+    missing_guesses = []
 
     def dbg(msg):
         if debug:
             print("hintdb: " + msg, file=sys.stderr)
 
-    def add_row(display, examples, note, count, kind):
+    def add_row(display, examples, note, count, kind, sources=None):
         if display in shown:
             return
         shown.add(display)
@@ -857,17 +868,12 @@ def match(guesses, debug=False):
             status += "; e.g. " + fmt_example(examples[0])
         mine.extend([display, "  # " + status])
 
-    def add_guess(guess, tool, has_rows):
+    def add_guess(guess, tool):
         if guess in shown:
             return
         shown.add(guess)
         summary = man_summary(con, tool) if tool else None
-        if summary:
-            status = f"model suggestion ({tool}: {summary})"
-        elif tool and not has_rows and not shutil.which(tool):
-            status = f"model suggestion; {tool} not installed"
-        else:
-            status = "model suggestion"
+        status = f"model suggestion ({tool}: {summary})" if summary else "model suggestion"
         theirs.extend([guess, "  # " + status])
 
     con = sqlite3.connect(DB) if os.path.exists(DB) else sqlite3.connect(":memory:")
@@ -881,12 +887,12 @@ def match(guesses, debug=False):
             gshape = shape(guess)
             cands = []
             if tool and os.path.exists(DB):
-                for display, examples, note, shp, count, kind in con.execute(
-                        "SELECT display, examples, dnote, shape, count, kind FROM entries "
-                        "WHERE cmdword = ?", (tool,)):
+                for display, examples, note, shp, count, kind, sources in con.execute(
+                        "SELECT display, examples, dnote, shape, count, kind, sources "
+                        "FROM entries WHERE cmdword = ?", (tool,)):
                     primary, all_ = overlap(gshape, shp)
                     cands.append((primary, all_, count, shp,
-                                  (display, examples, note, count, kind)))
+                                  (display, examples, note, count, kind, sources)))
             cands.sort(key=lambda c: c[:3], reverse=True)
 
             dbg(f"guess: {guess}")
@@ -914,16 +920,28 @@ def match(guesses, debug=False):
                 if key not in keys:
                     keys.add(key)
                     rows.append((key, row))
+            if tool and not installed(tool):
+                if rows:
+                    m = missing.setdefault(tool, {"rows": [], "sources": set()})
+                    for _, row in rows:
+                        if row[0] not in m["rows"] and len(m["rows"]) < MAX_ROWS:
+                            m["rows"].append(row[0])
+                            m["sources"].update(json.loads(row[5] or "[]"))
+                elif guess not in missing_guesses:
+                    missing_guesses.append(guess)
+                dbg(f"  -> {tool} not installed" + (f"; {len(rows)} row(s) listed as comments"
+                                                     if rows else ""))
+                continue
             if rows:
                 exact = any(c[3] == gshape for c in cands if c[0] >= MATCH_MIN)
                 per_guess.append(rows)
                 if not exact:
-                    add_guess(guess, tool, True)
+                    add_guess(guess, tool)
                 dbg(f"  -> {'exact' if exact else 'partial'} match "
                     f"({cands[0][0]:.2f} >= {MATCH_MIN}), {len(rows)} distinct row(s)"
                     + ("" if exact else "; guess shown too"))
             else:
-                add_guess(guess, tool, bool(cands))
+                add_guess(guess, tool)
                 dbg(f"  -> no match (best {cands[0][0]:.2f} < {MATCH_MIN})" if cands
                     else "  -> no match (no rows)")
         # Round-robin: each guess's best row, then each guess's second ...
@@ -937,7 +955,15 @@ def match(guesses, debug=False):
                     n += len(mine) > before
     finally:
         con.close()
-    return mine + theirs
+    out = mine + theirs
+    for tool, m in missing.items():
+        src = ", ".join(sorted({os.path.basename(p) for p in m["sources"]})) or "your sources"
+        out.append(f"# found in {src}, but {tool} is not installed here:")
+        out.extend("#   " + d for d in m["rows"])
+    if missing_guesses and not (mine or theirs):
+        out.append("# no installed command found; the model suggested the following:")
+        out.extend("#   " + g for g in missing_guesses)
+    return out
 
 # ---------------------------------------------------------------- cli
 

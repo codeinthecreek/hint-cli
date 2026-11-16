@@ -22,10 +22,15 @@ command you have actually used, in your usual form. Nothing is ever executed.
    your indexed commands for the same tool:
    - score = overlap of option flags (`-x`, `--long`, `+opt`, values ignored);
      ties are broken by overlap of all tokens, then by use count
-   - **exact** (same shape): your command only
-   - **partial** (flag overlap >= 0.5): your command, then the model's guess
-   - **no match**: the model's guess, with the tool's man page summary or a
-     "not installed" note
+   - **match** (flag overlap >= 0.5): up to 5 of your commands in total, best
+     first; variants that differ only in values (hosts, flag order) show
+     once. The model's guess follows unless it has the same shape as one of
+     them.
+   - **no match**: the model's guess, with the tool's man page summary
+   - **not installed** (not on PATH and not a shell builtin): never printed as
+     a command. Your rows for it are listed as `#` comments with the file
+     they came from; the model's guesses are listed that way only when
+     nothing installed was found.
 3. **Print.** Each result is two lines: the command, then a `#` status line
    saying where it came from.
 
@@ -298,11 +303,13 @@ Data flow from sources to the printed answer, traced with the example query
    |       0.50  0.33  x1     ssh -L <HOST>:localhost:<N> -i <PATH> <USER@HOST>
    |       0.00  0.33  x893   ssh <USER@HOST>
    |
+   |    tool not installed (not on PATH, not a builtin)?
+   |                          -> your rows as "# found in <source>" comments;
+   |                             guesses as comments only if nothing else
    |    best flags >= HINTDB_MATCH_MIN (0.5)?
-   |      exact (same shape)  -> your row only
-   |      partial             -> your row, then the guess      <- this case
+   |      exact (same shape)  -> your rows only (up to 5)
+   |      partial             -> your rows, then the guess     <- this case
    |      no match            -> the guess, with man summary
-   |                             or "<tool> not installed"
    v
   (3) OUTPUT    two lines per result, nothing executed; your rows from all
                 guesses first, then the model suggestions (each in guess order)

@@ -138,8 +138,32 @@ out=$(hintdb match "nslookup example.com" 2>&1)
 has "no rows: guess with man summary" "$out" \
   "# model suggestion (nslookup: query Internet name servers interactively)"
 
+echo "== installed only"
 out=$(hintdb match "foozz --bar" 2>&1)
-has "unknown tool: not installed" "$out" "# model suggestion; foozz not installed"
+line "uninstalled guess, nothing else: says so" "$out" 1 \
+  "# no installed command found; the model suggested the following:"
+line "uninstalled guess shown as a comment only" "$out" 2 "#   foozz --bar"
+
+out=$(hintdb match "foozz --bar" "dig +short example.com" 2>&1)
+line "uninstalled guess omitted when an installed command is shown" "$out" 1 "dig +short <HOST>"
+lacks "uninstalled guess not mentioned then" "$out" "foozz"
+
+out=$(hintdb match "fakesched -Nel" 2>&1)
+line "user's rows for an uninstalled tool: named source" "$out" 1 \
+  "# found in cluster.md, but fakesched is not installed here:"
+line "user's rows for an uninstalled tool: as comments" "$out" 2 "#   fakesched -Nel"
+if grep -q '^fakesched' <<<"$out"; then
+  bad "uninstalled tool never printed as a command" "$out"
+else
+  ok "uninstalled tool never printed as a command"
+fi
+lacks "uninstalled guess with rows not repeated in the model block" "$out" "no installed command found"
+
+out=$(hintdb match "history 10" 2>&1)
+line "shell builtins count as installed (history)" "$out" 1 "history 10"
+out=$(hintdb match "fc -ln -10" 2>&1)
+line "shell builtins count as installed (fc, user's row)" "$out" 1 "fc -ln -10"
+has "shell builtins count as installed (fc, user's row)" "$out" "# your history x1"
 
 out=$(hintdb match "dig +short a.example.org" "dig +short b.example.org" 2>&1)
 if [ "$(grep -c '^dig +short <HOST>$' <<<"$out")" = 1 ]; then
