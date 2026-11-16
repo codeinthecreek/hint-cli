@@ -113,6 +113,12 @@ def _file(m):
     return "<FILE>" if m.group(1).lower() in FILE_EXT else m.group(0)
 
 
+def _path(m):
+    # A trailing / changes meaning (rsync source, symlinked dirs): keep it.
+    p = m.group(0)
+    return "<PATH>/" if len(p) > 1 and p.endswith("/") else "<PATH>"
+
+
 def host_template(cmd):
     """Replace only host names / IPs in a real command, keeping everything else."""
     return HOSTNAME_AT.sub(_host, IPV6.sub("<HOST>", IPV4.sub("<HOST>", cmd)))
@@ -125,7 +131,7 @@ SHAPE_SUBS = [
     (re.compile(r"'[^']*'|\"[^\"]*\""), "<STR>"),
     (re.compile(r"\bhttps?://\S+"), "<URL>"),
     (re.compile(r"\b[\w.+-]+@[\w.-]+\b"), "<USER@HOST>"),
-    (PATH, "<PATH>"),
+    (PATH, _path),
     (IPV4, "<HOST>"),
     (IPV6, "<HOST>"),
     (HOSTNAME, _host),
@@ -216,7 +222,8 @@ def template(variants):
                 cp = os.path.commonpath(raw)
             except ValueError:
                 cp = ""
-            out.append(cp.rstrip("/") + "/<PATH>" if cp not in ("", "/", ".", "~") else "<PATH>")
+            slash = "/" if all(len(t) > 1 and t.endswith("/") for t in raw) else ""
+            out.append((cp.rstrip("/") + "/<PATH>" if cp not in ("", "/", ".", "~") else "<PATH>") + slash)
             continue
         # Shape the token as written: a quoted multi-word value must become
         # <STR>, not its unquoted words.
@@ -472,7 +479,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "9"
+SCHEMA_VERSION = "10"
 
 
 def fingerprint(files):

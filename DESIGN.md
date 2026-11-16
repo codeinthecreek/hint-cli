@@ -73,7 +73,10 @@ notes, in the form the user actually uses. Nothing is ever executed.
   lines whose command is not on PATH.
 - **Shapes:** values become placeholders (`<HOST>`, `<USER@HOST>`, `<PATH>`,
   `<FILE>`, `<STR>`, `<URL>`, `<HEX>`, `<N>`). Flags stay exactly as written.
-  Quotes around a single token are ignored. Commands with the same shape merge
+  Quotes around a single token are ignored. A path's trailing `/` is kept
+  (`<PATH>/`): it changes meaning (rsync source, symlinked directories), so
+  `du -sh dir/` and `du -sh dir` stay separate rows and a merged row shows it.
+  Commands with the same shape merge
   into one row with a use count, a display template (tokens that vary become
   placeholders) and two real examples. Rows are not merged any further in the
   index: grouping by flags alone (tried 2026-11-16) merged commands whose

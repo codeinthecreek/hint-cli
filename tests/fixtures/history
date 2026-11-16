@@ -50,3 +50,7 @@ ssh-keygen -l -f /home/user/.ssh/id_ed25519.pub
 ssh-keygen -l -f /home/user/.ssh/id_rsa.pub
 kubectl get nodes
 fc -ln -10
+rsync -e "ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes" --archive --delete u@build.example.org:/srv/backup/ /home/user/backup/build/ # trailing / on source copies its contents
+rsync -e "ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes" --archive --delete u@build2.example.org:/srv/data/ /home/user/backup/build2/
+du -sh /srv/current/
+du -sh /srv/current
