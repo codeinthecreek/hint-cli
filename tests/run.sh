@@ -66,7 +66,8 @@ fi
 
 echo "== eval scoring"
 # A <placeholder> stands for a value: the text around it must match, and it
-# never stands for a flag. Prints each case that scores wrong.
+# never stands for a flag. When both tokens have placeholders, it never stands
+# for text with a `:` (push vs pull). Prints each case that scores wrong.
 out=$(python3 - "$root/eval" <<'EOF'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -78,6 +79,11 @@ cases = [  # printed line, expected line, hit (normalized level or better)?
     ("tar -xf <FILE> -C <PATH>", "tar -xf <archive> -C <dir>", True),
     ("unzip <FILE> -d <PATH>", "unzip -d <PATH> <ARCHIVE>", False),
     ("kubectl delete pods --all", "kubectl delete pods <name>", False),
+    ("rsync -av <PATH> <USER@HOST>:<PATH>", "rsync -av <USER@HOST>:<PATH> <PATH>", False),
+    ("scp <FILE> <USER@HOST>:<PATH>", "scp <USER@HOST>:<PATH> <FILE>", False),
+    ("ssh <USER@HOST>", "ssh <USER>@<HOST>", True),
+    ("glow -p <PATH>", "glow -p <FILE>.md", True),
+    ("curl https://example.org/api", "curl <url>", True),
 ]
 for line, exp, want in cases:
     lv = st.level(line, [exp])

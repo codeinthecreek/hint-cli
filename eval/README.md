@@ -72,5 +72,10 @@ python3 eval/best_case.py --queries ~/path/to/my-queries.tsv
   match (`user@<host>` does not match `root@example.org`), and it never stands
   for a flag. A command typed with its arguments in another order is not a hit;
   add that form as another accepted line if it is the way you type it.
+- When both tokens have placeholders (hint prints `<PATH>`, you wrote
+  `<USER@HOST>:<PATH>`), a placeholder never stands for text with a `:`, so
+  rsync or scp push and pull are told apart. Two bare placeholders still match
+  each other whatever their names, so swapped ones are not told apart:
+  `cp <FILE> <PATH>` scores the same as `cp <PATH> <FILE>`.
 - `score_tiers.py` has a small table of tools with subcommands (for the
   "cmd" level). It is used only for scoring here, not by hint.

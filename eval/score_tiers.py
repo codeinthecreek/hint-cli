@@ -8,7 +8,8 @@ the strictest one it satisfies. Levels (strict -> loose), reported cumulatively:
   exact        identical string
   normalized   same tokens after: leading `sudo` dropped, quotes removed (shlex),
                whitespace collapsed; a <placeholder> stands for one or more characters
-               of one token (text around it must match), never for a flag
+               of one token (text around it must match), never for a flag; when
+               both tokens have placeholders, never for text with a `:`
   cmd+flags    same command key and flag-set Jaccard >= 0.5 (both empty counts as 1)
   cmd          same command key (executable + subcommand), any arguments
 
@@ -52,18 +53,24 @@ def normalized(line):
     return strip_sudo(tokens(line.strip()))
 
 
-def ph_match(pat, tok):
+def ph_match(pat, tok, any_char=".+"):
     """True if token `pat` (containing <placeholders>) matches token `tok`: the text
     around the placeholders must be equal, each placeholder stands for one or more
     characters, and a placeholder never stands for a flag (a leading `-`)."""
     if tok.startswith("-") and not pat.startswith("-"):
         return False
-    rx = ".+".join(re.escape(p) for p in PH.split(pat))
+    rx = any_char.join(re.escape(p) for p in PH.split(pat))
     return re.fullmatch(rx, tok) is not None
 
 
 def tok_eq(a, b):
-    return a == b or (is_ph(a) and ph_match(a, b)) or (is_ph(b) and ph_match(b, a))
+    if a == b:
+        return True
+    if is_ph(a) and is_ph(b):
+        # Both are placeholders: one never stands for text with a `:`, so
+        # <PATH> is not <USER@HOST>:<PATH> (rsync/scp push vs pull).
+        return ph_match(a, b, "[^:]+") or ph_match(b, a, "[^:]+")
+    return (is_ph(a) and ph_match(a, b)) or (is_ph(b) and ph_match(b, a))
 
 
 def first_segment(line):
