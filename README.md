@@ -303,7 +303,8 @@ Data flow from sources to the printed answer, traced with the example query
    |      no match            -> the guess, with man summary
    |                             or "<tool> not installed"
    v
-  (3) OUTPUT    two lines per result, nothing executed
+  (3) OUTPUT    two lines per result, nothing executed; your rows from all
+                guesses first, then the model suggestions (each in guess order)
 
   ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>
     # your history x2; e.g. ssh -L 11434:localhost:11434 -i ~/.ssh/my_key ubuntu@gpu-dev.example.com

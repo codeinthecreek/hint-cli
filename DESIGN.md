@@ -37,6 +37,10 @@ notes, in the form the user actually uses. Nothing is ever executed.
    - **no match**: the guess alone, with the tool's man summary, or a
      "not installed" note if the tool has no rows and is not on PATH
 
+   Across guesses, all of the user's rows are printed first, then all model
+   suggestions, each group in guess order. A wrong first guess must not push
+   the user's command below a model suggestion.
+
 ## Index
 
 - **Sources:** bash history, markdown and text notes, justfiles. Man NAME

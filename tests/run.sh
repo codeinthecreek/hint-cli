@@ -137,6 +137,11 @@ else
   bad "same row for two guesses printed once" "$out"
 fi
 
+out=$(hintdb match "nslookup example.com" "dig +short example.com" 2>&1)
+line "user's row from a later guess comes before an earlier model suggestion" "$out" 1 \
+  "dig +short <HOST>"
+line "model suggestion follows the user's rows" "$out" 3 "nslookup example.com"
+
 out=$(HINTDB_MATCH_MIN=0.9 hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
 line "HINTDB_MATCH_MIN raises the bar" "$out" 1 "ssh -L 8080:localhost:80 user@remote_host"
 
