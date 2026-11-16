@@ -813,14 +813,32 @@ def man_summary(con, tool):
     return row[0] if row else None
 
 
+MAX_ROWS = 5
+EXTRA_MIN = 0.5   # share of the guess's literal words an extra row must keep
+
+
+def literal_words(shp):
+    """Plain words of a shape after the tool: not flags, placeholders or
+    separators. In a guess these are the words that say what is wanted
+    (`list` in `docker exec -it ollama ollama list`)."""
+    toks = shp.split()
+    while toks and (toks[0] in PREFIX or ASSIGN.match(toks[0])):
+        toks = toks[1:]
+    return {t for t in toks[1:] if t[0] not in "-+" and "<" not in t and t not in CMD_SEP}
+
+
 def match(guesses, debug=False):
-    """For each guess: the user's closest row for the same tool if its overlap
-    is >= MATCH_MIN; if that overlap is below 1.0 the guess is printed after it
-    as well. No match: the guess alone. Two lines per result: command, status.
-    The user's rows are printed before all model suggestions, each group in
-    guess order, so a wrong first guess cannot push the user's command down.
+    """Case 1: the user's rows for the guessed tool whose overlap is
+    >= MATCH_MIN, best first (extra rows must keep the guess's words; rows that
+    differ only in values show once), up to MAX_ROWS in total taken
+    round-robin over the guesses (each guess's best row first). A guess is also
+    printed, as a model suggestion, unless one of its rows has the same shape.
+    Case 2: no matching row: the guess alone. Two lines per result: command,
+    status. The user's rows come before all model suggestions, so a wrong first
+    guess cannot push the user's command down.
     debug: print each guess's shape and top-scoring candidates to stderr."""
     mine, theirs, shown = [], [], set()
+    per_guess = []   # matching rows of each guess, best first, one per group
 
     def dbg(msg):
         if debug:
@@ -879,17 +897,42 @@ def match(guesses, debug=False):
             for primary, all_, count, shp, _ in cands[:5]:
                 dbg(f"    {primary:5.2f} {all_:5.2f}  x{count:<5} {shp}")
 
-            if cands and cands[0][0] >= MATCH_MIN:
-                exact = cands[0][3] == gshape
-                add_row(*cands[0][4])
+            # The best row is always kept. Extra rows must keep at least
+            # EXTRA_MIN of the guess's literal words; rows with the same flags
+            # and the same kept words differ only in values and show once.
+            gw = literal_words(gshape)
+            rows, keys = [], set()
+            for primary, all_, count, shp, row in cands:
+                if primary < MATCH_MIN:
+                    break
+                kept = gw & literal_words(shp)
+                if rows and gw and len(kept) / len(gw) < EXTRA_MIN:
+                    continue
+                key = (tool, frozenset(flag_set(shp.split()[1:])), frozenset(kept))
+                if key not in keys:
+                    keys.add(key)
+                    rows.append((key, row))
+            if rows:
+                exact = any(c[3] == gshape for c in cands if c[0] >= MATCH_MIN)
+                per_guess.append(rows)
                 if not exact:
                     add_guess(guess, tool, True)
                 dbg(f"  -> {'exact' if exact else 'partial'} match "
-                    f"({cands[0][0]:.2f} >= {MATCH_MIN})" + ("" if exact else "; guess shown too"))
+                    f"({cands[0][0]:.2f} >= {MATCH_MIN}), {len(rows)} distinct row(s)"
+                    + ("" if exact else "; guess shown too"))
             else:
                 add_guess(guess, tool, bool(cands))
                 dbg(f"  -> no match (best {cands[0][0]:.2f} < {MATCH_MIN})" if cands
                     else "  -> no match (no rows)")
+        # Round-robin: each guess's best row, then each guess's second ...
+        keys, n = set(), 0
+        for rank in range(max((len(r) for r in per_guess), default=0)):
+            for rows in per_guess:
+                if rank < len(rows) and n < MAX_ROWS and rows[rank][0] not in keys:
+                    keys.add(rows[rank][0])
+                    before = len(mine)
+                    add_row(*rows[rank][1])
+                    n += len(mine) > before
     finally:
         con.close()
     return mine + theirs

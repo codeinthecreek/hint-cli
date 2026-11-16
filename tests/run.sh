@@ -119,7 +119,7 @@ line "guess without flags matches on all tokens" "$out" 1 "dig <HOST>"
 out=$(hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
 line "flags beat use count: tunnel row, not plain ssh x6" "$out" 1 \
   "ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>"
-line "partial match also prints the guess" "$out" 3 "ssh -L 8080:localhost:80 user@remote_host"
+has "partial match also prints the guess, after the user's rows" "$out" "ssh -L 8080:localhost:80 user@remote_host"
 has "partial match guess labelled with man summary" "$out" \
   "# model suggestion (ssh: OpenSSH remote login client)"
 
@@ -141,6 +141,16 @@ out=$(hintdb match "nslookup example.com" "dig +short example.com" 2>&1)
 line "user's row from a later guess comes before an earlier model suggestion" "$out" 1 \
   "dig +short <HOST>"
 line "model suggestion follows the user's rows" "$out" 3 "nslookup example.com"
+
+out=$(hintdb match "ssh-keygen -f ~/.ssh/known_hosts" 2>&1)
+has "case 1: several matching rows of the tool are shown" "$out" "ssh-keygen -l -f /home/user/.ssh/<PATH>"
+if [ "$(grep -c '^ssh-keygen .*-R' <<<"$out")" = 1 ]; then
+  ok "case 1: host and flag-order variants of a row shown once"
+else
+  bad "case 1: host and flag-order variants of a row shown once" "$out"
+fi
+lacks "case 1: rows below HINTDB_MATCH_MIN not shown" "$out" "-C <STR>"
+line "case 1: model guess follows the user's rows" "$out" 5 "ssh-keygen -f ~/.ssh/known_hosts"
 
 out=$(HINTDB_MATCH_MIN=0.9 hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
 line "HINTDB_MATCH_MIN raises the bar" "$out" 1 "ssh -L 8080:localhost:80 user@remote_host"

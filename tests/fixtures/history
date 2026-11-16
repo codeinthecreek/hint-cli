@@ -44,3 +44,7 @@ ssh -L 0.0.0.0:11434:localhost:11434 -i ~/.ssh/key user@gpu2.example.org
 ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres
 ssh-keygen -t ed25519 -f ~/.ssh/web_key -C "web deploy key 2025"
 ssh-keygen -t ed25519 -f ~/.ssh/db_key -C "db backup key"
+ssh-keygen -f "/home/user/.ssh/known_hosts" -R buildhost
+ssh-keygen -R web2.example.org -f "/home/user/.ssh/known_hosts"
+ssh-keygen -l -f /home/user/.ssh/id_ed25519.pub
+ssh-keygen -l -f /home/user/.ssh/id_rsa.pub

@@ -28,18 +28,39 @@ notes, in the form the user actually uses. Nothing is ever executed.
       ignored), or of all argument tokens if the guess has no flags
    2. overlap of all argument tokens (tie-breaker)
    3. use count (last tie-breaker)
-3. **Output.** Two lines per result: the command, then a `#` status line
-   saying where it came from. The user's usage takes precedence over the
-   model's guess:
-   - **exact** (identical shape): the user's row only
-   - **partial** (best flag score >= `HINTDB_MATCH_MIN`, default 0.5): the
-     user's row, then the guess
-   - **no match**: the guess alone, with the tool's man summary, or a
-     "not installed" note if the tool has no rows and is not on PATH
 
-   Across guesses, all of the user's rows are printed first, then all model
-   suggestions, each group in guess order. A wrong first guess must not push
-   the user's command below a model suggestion.
+   A row matches when its flag score is >= `HINTDB_MATCH_MIN` (default 0.5).
+3. **Installed only.** A command is shown only if its tool is installed here
+   (on PATH, or a just recipe). This applies to the user's rows and to model
+   guesses alike, and is checked at lookup time, so installing a tool later
+   brings its rows back without a rebuild. Asking about tools that are not
+   installed is not hint's job; it says so and stops there.
+4. **Output.** Two lines per result: the command, then a `#` status line
+   saying where it came from. Nothing is executed. In this order:
+   1. **The user's rows** (case 1: "I've run this before"): rows that match a
+      guess, best first, up to 5 in total, taken round-robin over the guesses
+      (each guess's best row first). The guess says which words matter: its
+      literal words (not flags or placeholders, e.g. `list` in
+      `docker exec -it ollama ollama list`). The best row is always shown;
+      extra rows must keep at least half of those words. Rows with the same
+      flags and the same kept words differ only in values and are shown once,
+      the best-scoring one. So `ssh-keygen -f <PATH> -R <HOST>`, `-R oldhost`
+      and `-R <HOST> -f <PATH>` show as one row, while `kubectl get pods`,
+      `-A` and `--show-labels` show as separate rows. This only hides rows for
+      that lookup; the index keeps them all.
+   2. **Model suggestions** (case 2: "I don't know the command"): guesses with
+      no matching row, plus guesses whose shape differs from the matched row.
+      The first is labelled "most likely", the others "alternative", followed
+      by `see man <tool>(<section>)` once per tool that has a man page.
+   3. **Not installed**, as `#` comments only, never as commands:
+      - rows from the user's sources:
+        `# found in <source>, but <tool> is not installed here:` then the rows
+      - model guesses, when no installed command was printed at all:
+        `# no installed command found; the model suggested the following:`
+        then the guesses
+
+   A wrong first guess must not push the user's command below a model
+   suggestion: the user's rows always come first, each group in guess order.
 
 ## Index
 
@@ -52,7 +73,12 @@ notes, in the form the user actually uses. Nothing is ever executed.
   `<FILE>`, `<STR>`, `<URL>`, `<HEX>`, `<N>`). Flags stay exactly as written.
   Quotes around a single token are ignored. Commands with the same shape merge
   into one row with a use count, a display template (tokens that vary become
-  placeholders) and two real examples.
+  placeholders) and two real examples. Rows are not merged any further in the
+  index: grouping by flags alone (tried 2026-11-16) merged commands whose
+  positional words matter (`docker exec -it ollama ollama list` / `... ps`,
+  `mount -t cifs` / `-t nfs`, `git rev-parse --short HEAD` / `origin/main`).
+- **Source:** each row records the source files it came from, for the
+  "found in <source>" message.
 - **Notes:** a note belongs to the variant it came from. It appears on a merged
   row only when variants carrying it make up at least half the uses; otherwise
   it is shown only next to its own example. All notes stay searchable.
