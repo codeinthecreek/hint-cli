@@ -55,8 +55,11 @@ bash -n "$root/hint" && ok "hint parses" || bad "hint parses"
 for f in hint hintdb; do
   [ -x "$root/$f" ] && ok "$f is executable" || bad "$f is executable" "chmod +x $f"
 done
-if grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py >/dev/null; then
-  bad "code is ASCII only" "$(grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py)"
+for f in "$root"/eval/*.py; do
+  python3 -m py_compile "$f" && ok "$(basename "$f") compiles" || bad "$(basename "$f") compiles"
+done
+if grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/* >/dev/null; then
+  bad "code is ASCII only" "$(grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/*)"
 else
   ok "code is ASCII only"
 fi
@@ -80,6 +83,8 @@ has "hosts, IPs and quoting merge into one row" "$idx" \
   "ssh-keygen -f '/home/user/.ssh/known_hosts' -R <HOST>	remove offending ECDSA key	x4"
 has "varying paths keep their common directory" "$idx" "tail -f /var/log/<PATH>		x3"
 has "file names become <FILE>" "$idx" "tar -czf <FILE> docs		x2"
+has "varying quoted strings become <STR>, not bare words" "$idx" \
+  "ssh-keygen -t ed25519 -f ~/.ssh/<PATH> -C <STR>		x2"
 has "python -m module name is not a host" "$idx" "python3 -m http.server 8000		x2"
 has "flags kept as written: +short is its own row" "$idx" "dig +short <HOST>		x3"
 has "note on a minority variant stays off the row" "$idx" "mkdir <PATH>		x6"
@@ -93,6 +98,17 @@ lacks "markdown: console output skipped" "$idx" "node1 Ready"
 lacks "markdown: non-shell fence skipped" "$idx" "apiVersion"
 has "justfile: recipe name and doc comment as note" "$idx" \
   "terraform destroy -auto-approve	just rebuild; rebuild the cluster from scratch"
+
+src=$(python3 - "$HINTDB_DB" <<'EOF2'
+import json, os, sqlite3, sys
+for display, sources in sqlite3.connect(sys.argv[1]).execute(
+        "SELECT display, sources FROM entries"):
+    print(display + "\t" + " ".join(os.path.basename(p) for p in json.loads(sources)))
+EOF2
+)
+has "source: a notes row records its notes file" "$src" "kubectl cordon node1	k8s.md"
+has "source: a history row records the history file" "$src" "dig +short <HOST>	history"
+has "source: a row from history and notes records both" "$src" "kubectl get nodes	history k8s.md"
 
 out=$(hintdb update)
 has "no rebuild when nothing changed" "$out" "entries up to date"
@@ -117,16 +133,51 @@ line "guess without flags matches on all tokens" "$out" 1 "dig <HOST>"
 out=$(hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
 line "flags beat use count: tunnel row, not plain ssh x6" "$out" 1 \
   "ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>"
-line "partial match also prints the guess" "$out" 3 "ssh -L 8080:localhost:80 user@remote_host"
-has "partial match guess labelled with man summary" "$out" \
-  "# model suggestion (ssh: OpenSSH remote login client)"
+has "partial match also prints the guess, after the user's rows" "$out" "ssh -L 8080:localhost:80 user@remote_host"
+line "partial match: guess below the user's rows is just a model suggestion" "$out" 6 \
+  "  # model suggestion"
+has "case 2: see man, with section and summary" "$out" "# see man ssh(1): OpenSSH remote login client"
 
 out=$(hintdb match "nslookup example.com" 2>&1)
-has "no rows: guess with man summary" "$out" \
-  "# model suggestion (nslookup: query Internet name servers interactively)"
+line "case 2: first guess" "$out" 1 "nslookup example.com"
+line "case 2: first guess is the most likely" "$out" 2 "  # most likely (model suggestion)"
+line "case 2: see man after the suggestions" "$out" 3 \
+  "# see man nslookup(1): query Internet name servers interactively"
 
+out=$(hintdb match "nslookup example.com" "nslookup -type=mx example.com" 2>&1)
+line "case 2: later guesses are alternatives" "$out" 4 "  # alternative (model suggestion)"
+if [ "$(grep -c '^# see man nslookup' <<<"$out")" = 1 ]; then
+  ok "case 2: see man once per tool"
+else
+  bad "case 2: see man once per tool" "$out"
+fi
+
+echo "== installed only"
 out=$(hintdb match "foozz --bar" 2>&1)
-has "unknown tool: not installed" "$out" "# model suggestion; foozz not installed"
+line "uninstalled guess, nothing else: says so" "$out" 1 \
+  "# no installed command found; the model suggested the following:"
+line "uninstalled guess shown as a comment only" "$out" 2 "#   foozz --bar"
+
+out=$(hintdb match "foozz --bar" "dig +short example.com" 2>&1)
+line "uninstalled guess omitted when an installed command is shown" "$out" 1 "dig +short <HOST>"
+lacks "uninstalled guess not mentioned then" "$out" "foozz"
+
+out=$(hintdb match "fakesched -Nel" 2>&1)
+line "user's rows for an uninstalled tool: named source" "$out" 1 \
+  "# found in cluster.md, but fakesched is not installed here:"
+line "user's rows for an uninstalled tool: as comments" "$out" 2 "#   fakesched -Nel"
+if grep -q '^fakesched' <<<"$out"; then
+  bad "uninstalled tool never printed as a command" "$out"
+else
+  ok "uninstalled tool never printed as a command"
+fi
+lacks "uninstalled guess with rows not repeated in the model block" "$out" "no installed command found"
+
+out=$(hintdb match "history 10" 2>&1)
+line "shell builtins count as installed (history)" "$out" 1 "history 10"
+out=$(hintdb match "fc -ln -10" 2>&1)
+line "shell builtins count as installed (fc, user's row)" "$out" 1 "fc -ln -10"
+has "shell builtins count as installed (fc, user's row)" "$out" "# your history x1"
 
 out=$(hintdb match "dig +short a.example.org" "dig +short b.example.org" 2>&1)
 if [ "$(grep -c '^dig +short <HOST>$' <<<"$out")" = 1 ]; then
@@ -134,6 +185,21 @@ if [ "$(grep -c '^dig +short <HOST>$' <<<"$out")" = 1 ]; then
 else
   bad "same row for two guesses printed once" "$out"
 fi
+
+out=$(hintdb match "nslookup example.com" "dig +short example.com" 2>&1)
+line "user's row from a later guess comes before an earlier model suggestion" "$out" 1 \
+  "dig +short <HOST>"
+line "model suggestion follows the user's rows" "$out" 3 "nslookup example.com"
+
+out=$(hintdb match "ssh-keygen -f ~/.ssh/known_hosts" 2>&1)
+has "case 1: several matching rows of the tool are shown" "$out" "ssh-keygen -l -f /home/user/.ssh/<PATH>"
+if [ "$(grep -c '^ssh-keygen .*-R' <<<"$out")" = 1 ]; then
+  ok "case 1: host and flag-order variants of a row shown once"
+else
+  bad "case 1: host and flag-order variants of a row shown once" "$out"
+fi
+lacks "case 1: rows below HINTDB_MATCH_MIN not shown" "$out" "-C <STR>"
+line "case 1: model guess follows the user's rows" "$out" 5 "ssh-keygen -f ~/.ssh/known_hosts"
 
 out=$(HINTDB_MATCH_MIN=0.9 hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
 line "HINTDB_MATCH_MIN raises the bar" "$out" 1 "ssh -L 8080:localhost:80 user@remote_host"

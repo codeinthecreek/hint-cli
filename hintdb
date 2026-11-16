@@ -59,7 +59,8 @@ BUILTINS = {
     "test", "times", "trap", "type", "typeset", "ulimit", "umask", "unalias",
     "unset", "wait", "for", "while", "if", "until", "case", "time", "[", "[[",
     "{", "(", "!", "function", "pushd", "popd", "dirs", "disown", "kill",
-    "suspend", "compgen", "complete", "fc",
+    "suspend", "compgen", "complete", "fc", "history", "cd", "pwd", "source", ".",
+    "jobs", "fg", "bg", "exit", "logout", "true", "false",
 }
 SECRET = re.compile(
     r"(?i)(passw(or)?d|passwd|secret|token|api[_-]?key|authorization:|bearer\s|"
@@ -217,7 +218,9 @@ def template(variants):
                 cp = ""
             out.append(cp.rstrip("/") + "/<PATH>" if cp not in ("", "/", ".", "~") else "<PATH>")
             continue
-        out.append(token_shape(raw[0]))
+        # Shape the token as written: a quoted multi-word value must become
+        # <STR>, not its unquoted words.
+        out.append(token_shape(col[0]))
     return " ".join(out)
 
 
@@ -469,7 +472,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "9"
 
 
 def fingerprint(files):
@@ -510,9 +513,10 @@ def build(files):
             if kind != "history":
                 e[2] = kind
             g = groups.setdefault(shape(cmd), {"variants": {}, "notes": [], "vnotes": {},
-                                               "kinds": set()})
+                                               "kinds": set(), "sources": set()})
             g["variants"][cmd] = e
             g["kinds"].add(kind)
+            g["sources"].add(path)   # for "found in <source>"
             if note:
                 add_note(g["notes"], note)                        # searched
                 add_note(g["vnotes"].setdefault(cmd, []), note)   # shown per variant
@@ -559,16 +563,17 @@ def build(files):
                  for c in examples]
         rows.append((prog, args, data, " | ".join(examples), "; ".join(g["notes"])[:500],
                      display, dnote[:300], json.dumps(shown), cmdword, shp, count,
-                     max(v[1] for v in variants.values()), kind))
+                     max(v[1] for v in variants.values()), kind,
+                     json.dumps(sorted(g["sources"]))))
 
     write_db(DB, """
         CREATE VIRTUAL TABLE entries USING fts5(
           prog, args, data, variants, note,
           display UNINDEXED, dnote UNINDEXED, examples UNINDEXED,
           cmdword UNINDEXED, shape UNINDEXED,
-          count UNINDEXED, recency UNINDEXED, kind UNINDEXED,
+          count UNINDEXED, recency UNINDEXED, kind UNINDEXED, sources UNINDEXED,
           tokenize = 'porter unicode61');
-        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
+        """, "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows, fingerprint(files))
     return len(rows)
 
 
@@ -800,29 +805,61 @@ def overlap(guess_shape, row_shape):
     return primary, all_
 
 
-def man_summary(con, tool):
+def man_page(con, tool):
+    """(section, NAME description) of the tool's man page, or None."""
     if not os.path.exists(MANDB):
         return None
     try:
         con.execute("ATTACH DATABASE ? AS man", (MANDB,))
     except sqlite3.OperationalError:
         pass  # already attached
-    row = con.execute("SELECT desc FROM man.pages WHERE name = ?", (tool,)).fetchone()
-    return row[0] if row else None
+    return con.execute("SELECT section, desc FROM man.pages WHERE name = ?",
+                       (tool,)).fetchone()
+
+
+MAX_ROWS = 5
+EXTRA_MIN = 0.5   # share of the guess's literal words an extra row must keep
+
+
+def literal_words(shp):
+    """Plain words of a shape after the tool: not flags, placeholders or
+    separators. In a guess these are the words that say what is wanted
+    (`list` in `docker exec -it ollama ollama list`)."""
+    toks = shp.split()
+    while toks and (toks[0] in PREFIX or ASSIGN.match(toks[0])):
+        toks = toks[1:]
+    return {t for t in toks[1:] if t[0] not in "-+" and "<" not in t and t not in CMD_SEP}
+
+
+def installed(tool):
+    """Installed here: on PATH or a shell builtin (or an explicit path)."""
+    return tool in BUILTINS or shutil.which(tool) is not None
 
 
 def match(guesses, debug=False):
-    """For each guess: the user's closest row for the same tool if its overlap
-    is >= MATCH_MIN; if that overlap is below 1.0 the guess is printed after it
-    as well. No match: the guess alone. Two lines per result: command, status.
+    """Case 1: the user's rows for the guessed tool whose overlap is
+    >= MATCH_MIN, best first (extra rows must keep the guess's words; rows that
+    differ only in values show once), up to MAX_ROWS in total taken
+    round-robin over the guesses (each guess's best row first). A guess is also
+    printed, as a model suggestion, unless one of its rows has the same shape.
+    Case 2: no matching row: the guess alone. Two lines per result: command,
+    status. The user's rows come before all model suggestions, so a wrong first
+    guess cannot push the user's command down.
+    Installed only: a tool that is not on PATH (and not a shell builtin) is
+    never printed as a command. Its rows are listed as comments with their
+    source; uninstalled guesses are listed only if nothing else was printed.
     debug: print each guess's shape and top-scoring candidates to stderr."""
-    out, shown = [], set()
+    mine, theirs, shown = [], [], set()
+    per_guess = []   # matching rows of each guess, best first, one per group
+    missing = {}     # uninstalled tool -> {"rows": [display], "sources": set()}
+    missing_guesses = []
+    man_tools = []   # tools of the model suggestions, for "see man"
 
     def dbg(msg):
         if debug:
             print("hintdb: " + msg, file=sys.stderr)
 
-    def add_row(display, examples, note, count, kind):
+    def add_row(display, examples, note, count, kind, sources=None):
         if display in shown:
             return
         shown.add(display)
@@ -831,20 +868,15 @@ def match(guesses, debug=False):
         examples = json.loads(examples) if examples else []
         if "<" in display and examples:
             status += "; e.g. " + fmt_example(examples[0])
-        out.extend([display, "  # " + status])
+        mine.extend([display, "  # " + status])
 
-    def add_guess(guess, tool, has_rows):
+    def add_guess(guess, tool):
         if guess in shown:
             return
         shown.add(guess)
-        summary = man_summary(con, tool) if tool else None
-        if summary:
-            status = f"model suggestion ({tool}: {summary})"
-        elif tool and not has_rows and not shutil.which(tool):
-            status = f"model suggestion; {tool} not installed"
-        else:
-            status = "model suggestion"
-        out.extend([guess, "  # " + status])
+        theirs.append(guess)
+        if tool and tool not in man_tools:
+            man_tools.append(tool)
 
     con = sqlite3.connect(DB) if os.path.exists(DB) else sqlite3.connect(":memory:")
     try:
@@ -857,12 +889,12 @@ def match(guesses, debug=False):
             gshape = shape(guess)
             cands = []
             if tool and os.path.exists(DB):
-                for display, examples, note, shp, count, kind in con.execute(
-                        "SELECT display, examples, dnote, shape, count, kind FROM entries "
-                        "WHERE cmdword = ?", (tool,)):
+                for display, examples, note, shp, count, kind, sources in con.execute(
+                        "SELECT display, examples, dnote, shape, count, kind, sources "
+                        "FROM entries WHERE cmdword = ?", (tool,)):
                     primary, all_ = overlap(gshape, shp)
                     cands.append((primary, all_, count, shp,
-                                  (display, examples, note, count, kind)))
+                                  (display, examples, note, count, kind, sources)))
             cands.sort(key=lambda c: c[:3], reverse=True)
 
             dbg(f"guess: {guess}")
@@ -875,19 +907,76 @@ def match(guesses, debug=False):
             for primary, all_, count, shp, _ in cands[:5]:
                 dbg(f"    {primary:5.2f} {all_:5.2f}  x{count:<5} {shp}")
 
-            if cands and cands[0][0] >= MATCH_MIN:
-                exact = cands[0][3] == gshape
-                add_row(*cands[0][4])
+            # The best row is always kept. Extra rows must keep at least
+            # EXTRA_MIN of the guess's literal words; rows with the same flags
+            # and the same kept words differ only in values and show once.
+            gw = literal_words(gshape)
+            rows, keys = [], set()
+            for primary, all_, count, shp, row in cands:
+                if primary < MATCH_MIN:
+                    break
+                kept = gw & literal_words(shp)
+                if rows and gw and len(kept) / len(gw) < EXTRA_MIN:
+                    continue
+                key = (tool, frozenset(flag_set(shp.split()[1:])), frozenset(kept))
+                if key not in keys:
+                    keys.add(key)
+                    rows.append((key, row))
+            if tool and not installed(tool):
+                if rows:
+                    m = missing.setdefault(tool, {"rows": [], "sources": set()})
+                    for _, row in rows:
+                        if row[0] not in m["rows"] and len(m["rows"]) < MAX_ROWS:
+                            m["rows"].append(row[0])
+                            m["sources"].update(json.loads(row[5] or "[]"))
+                elif guess not in missing_guesses:
+                    missing_guesses.append(guess)
+                dbg(f"  -> {tool} not installed" + (f"; {len(rows)} row(s) listed as comments"
+                                                     if rows else ""))
+                continue
+            if rows:
+                exact = any(c[3] == gshape for c in cands if c[0] >= MATCH_MIN)
+                per_guess.append(rows)
                 if not exact:
-                    add_guess(guess, tool, True)
+                    add_guess(guess, tool)
                 dbg(f"  -> {'exact' if exact else 'partial'} match "
-                    f"({cands[0][0]:.2f} >= {MATCH_MIN})" + ("" if exact else "; guess shown too"))
+                    f"({cands[0][0]:.2f} >= {MATCH_MIN}), {len(rows)} distinct row(s)"
+                    + ("" if exact else "; guess shown too"))
             else:
-                add_guess(guess, tool, bool(cands))
+                add_guess(guess, tool)
                 dbg(f"  -> no match (best {cands[0][0]:.2f} < {MATCH_MIN})" if cands
                     else "  -> no match (no rows)")
+        # Round-robin: each guess's best row, then each guess's second ...
+        keys, n = set(), 0
+        for rank in range(max((len(r) for r in per_guess), default=0)):
+            for rows in per_guess:
+                if rank < len(rows) and n < MAX_ROWS and rows[rank][0] not in keys:
+                    keys.add(rows[rank][0])
+                    before = len(mine)
+                    add_row(*rows[rank][1])
+                    n += len(mine) > before
+        see_man = []
+        for tool in man_tools:
+            page = man_page(con, tool)
+            if page:
+                see_man.append(f"# see man {tool}({page[0]}): {page[1]}")
     finally:
         con.close()
+    # Labels: "most likely" / "alternative" only when none of the user's rows
+    # are shown; below the user's rows a guess is just a model suggestion.
+    out = list(mine)
+    for i, guess in enumerate(theirs):
+        label = ("model suggestion" if mine else
+                 "most likely (model suggestion)" if i == 0 else "alternative (model suggestion)")
+        out.extend([guess, "  # " + label])
+    out += see_man
+    for tool, m in missing.items():
+        src = ", ".join(sorted({os.path.basename(p) for p in m["sources"]})) or "your sources"
+        out.append(f"# found in {src}, but {tool} is not installed here:")
+        out.extend("#   " + d for d in m["rows"])
+    if missing_guesses and not (mine or theirs):
+        out.append("# no installed command found; the model suggested the following:")
+        out.extend("#   " + g for g in missing_guesses)
     return out
 
 # ---------------------------------------------------------------- cli
