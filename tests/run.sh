@@ -131,12 +131,23 @@ out=$(hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
 line "flags beat use count: tunnel row, not plain ssh x6" "$out" 1 \
   "ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>"
 has "partial match also prints the guess, after the user's rows" "$out" "ssh -L 8080:localhost:80 user@remote_host"
-has "partial match guess labelled with man summary" "$out" \
-  "# model suggestion (ssh: OpenSSH remote login client)"
+line "partial match: guess below the user's rows is just a model suggestion" "$out" 6 \
+  "  # model suggestion"
+has "case 2: see man, with section and summary" "$out" "# see man ssh(1): OpenSSH remote login client"
 
 out=$(hintdb match "nslookup example.com" 2>&1)
-has "no rows: guess with man summary" "$out" \
-  "# model suggestion (nslookup: query Internet name servers interactively)"
+line "case 2: first guess" "$out" 1 "nslookup example.com"
+line "case 2: first guess is the most likely" "$out" 2 "  # most likely (model suggestion)"
+line "case 2: see man after the suggestions" "$out" 3 \
+  "# see man nslookup(1): query Internet name servers interactively"
+
+out=$(hintdb match "nslookup example.com" "nslookup -type=mx example.com" 2>&1)
+line "case 2: later guesses are alternatives" "$out" 4 "  # alternative (model suggestion)"
+if [ "$(grep -c '^# see man nslookup' <<<"$out")" = 1 ]; then
+  ok "case 2: see man once per tool"
+else
+  bad "case 2: see man once per tool" "$out"
+fi
 
 echo "== installed only"
 out=$(hintdb match "foozz --bar" 2>&1)

@@ -805,15 +805,16 @@ def overlap(guess_shape, row_shape):
     return primary, all_
 
 
-def man_summary(con, tool):
+def man_page(con, tool):
+    """(section, NAME description) of the tool's man page, or None."""
     if not os.path.exists(MANDB):
         return None
     try:
         con.execute("ATTACH DATABASE ? AS man", (MANDB,))
     except sqlite3.OperationalError:
         pass  # already attached
-    row = con.execute("SELECT desc FROM man.pages WHERE name = ?", (tool,)).fetchone()
-    return row[0] if row else None
+    return con.execute("SELECT section, desc FROM man.pages WHERE name = ?",
+                       (tool,)).fetchone()
 
 
 MAX_ROWS = 5
@@ -852,6 +853,7 @@ def match(guesses, debug=False):
     per_guess = []   # matching rows of each guess, best first, one per group
     missing = {}     # uninstalled tool -> {"rows": [display], "sources": set()}
     missing_guesses = []
+    man_tools = []   # tools of the model suggestions, for "see man"
 
     def dbg(msg):
         if debug:
@@ -872,9 +874,9 @@ def match(guesses, debug=False):
         if guess in shown:
             return
         shown.add(guess)
-        summary = man_summary(con, tool) if tool else None
-        status = f"model suggestion ({tool}: {summary})" if summary else "model suggestion"
-        theirs.extend([guess, "  # " + status])
+        theirs.append(guess)
+        if tool and tool not in man_tools:
+            man_tools.append(tool)
 
     con = sqlite3.connect(DB) if os.path.exists(DB) else sqlite3.connect(":memory:")
     try:
@@ -953,9 +955,21 @@ def match(guesses, debug=False):
                     before = len(mine)
                     add_row(*rows[rank][1])
                     n += len(mine) > before
+        see_man = []
+        for tool in man_tools:
+            page = man_page(con, tool)
+            if page:
+                see_man.append(f"# see man {tool}({page[0]}): {page[1]}")
     finally:
         con.close()
-    out = mine + theirs
+    # Labels: "most likely" / "alternative" only when none of the user's rows
+    # are shown; below the user's rows a guess is just a model suggestion.
+    out = list(mine)
+    for i, guess in enumerate(theirs):
+        label = ("model suggestion" if mine else
+                 "most likely (model suggestion)" if i == 0 else "alternative (model suggestion)")
+        out.extend([guess, "  # " + label])
+    out += see_man
     for tool, m in missing.items():
         src = ", ".join(sorted({os.path.basename(p) for p in m["sources"]})) or "your sources"
         out.append(f"# found in {src}, but {tool} is not installed here:")

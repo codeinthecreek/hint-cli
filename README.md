@@ -7,7 +7,8 @@ $ hint how do I create an ssh tunnel
 ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>
   # your history x2; e.g. ssh -L 11434:localhost:11434 -i ~/.ssh/my_key ubuntu@gpu-dev.example.com
 ssh -L 8080:localhost:80 user@remote_host
-  # model suggestion (ssh: OpenSSH remote login client)
+  # model suggestion
+# see man ssh(1): OpenSSH remote login client
 ```
 
 A local LLM guesses the command. `hint` then replaces the guess with the closest
@@ -26,7 +27,8 @@ command you have actually used, in your usual form. Nothing is ever executed.
      first; variants that differ only in values (hosts, flag order) show
      once. The model's guess follows unless it has the same shape as one of
      them.
-   - **no match**: the model's guess, with the tool's man page summary
+   - **no match**: the model's guess ("most likely" for the first, then
+     "alternative"; just "model suggestion" when your rows are shown above), with `# see man <tool>(<section>): <summary>` once per tool
    - **not installed** (not on PATH and not a shell builtin): never printed as
      a command. Your rows for it are listed as `#` comments with the file
      they came from; the model's guesses are listed that way only when
@@ -187,11 +189,12 @@ hintdb:     flags   all  uses   shape
 hintdb:      0.50  0.60  x2     ssh -L <N>:localhost:<N> -i <PATH> <USER@HOST>
 hintdb:      0.50  0.33  x2     ssh -L <N>:<HOST>:<N> -i <PATH> <USER@HOST>
 hintdb:      0.00  0.33  x893   ssh <USER@HOST>
-hintdb:   -> partial match (0.50 >= 0.5); guess shown too
+hintdb:   -> partial match (0.50 >= 0.5), 1 distinct row(s); guess shown too
 ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>
   # your history x2; e.g. ssh -L 11434:localhost:11434 -i ~/.ssh/my_key ubuntu@gpu-dev.example.com
 ssh -L 8080:localhost:80 user@remote_host
-  # model suggestion (ssh: OpenSSH remote login client)
+  # model suggestion
+# see man ssh(1): OpenSSH remote login client
 ```
 
 How to read it:
@@ -312,12 +315,15 @@ Data flow from sources to the printed answer, traced with the example query
    |      no match            -> the guess, with man summary
    v
   (3) OUTPUT    two lines per result, nothing executed; your rows from all
-                guesses first, then the model suggestions (each in guess order)
+                guesses first, then the model suggestions (each in guess order:
+                "most likely", then "alternative"), then "see man <tool>(<sec>)"
+                once per suggested tool, then any "not installed" comments
 
   ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>
     # your history x2; e.g. ssh -L 11434:localhost:11434 -i ~/.ssh/my_key ubuntu@gpu-dev.example.com
   ssh -L 8080:localhost:80 user@remote_host
-    # model suggestion (ssh: OpenSSH remote login client)
+    # model suggestion
+  # see man ssh(1): OpenSSH remote login client
 
 
  DEBUG ONLY

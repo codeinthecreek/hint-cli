@@ -50,8 +50,10 @@ notes, in the form the user actually uses. Nothing is ever executed.
       that lookup; the index keeps them all.
    2. **Model suggestions** (case 2: "I don't know the command"): guesses with
       no matching row, plus guesses whose shape differs from the matched row.
-      The first is labelled "most likely", the others "alternative", followed
-      by `see man <tool>(<section>)` once per tool that has a man page.
+      When none of the user's rows are shown, the first is labelled "most
+      likely" and the others "alternative"; below the user's rows they are
+      labelled just "model suggestion". Then `see man <tool>(<section>):
+      <summary>` once per suggested tool that has a man page.
    3. **Not installed**, as `#` comments only, never as commands:
       - rows from the user's sources:
         `# found in <source>, but <tool> is not installed here:` then the rows
