@@ -217,7 +217,9 @@ def template(variants):
                 cp = ""
             out.append(cp.rstrip("/") + "/<PATH>" if cp not in ("", "/", ".", "~") else "<PATH>")
             continue
-        out.append(token_shape(raw[0]))
+        # Shape the token as written: a quoted multi-word value must become
+        # <STR>, not its unquoted words.
+        out.append(token_shape(col[0]))
     return " ".join(out)
 
 
@@ -469,7 +471,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "7"
 
 
 def fingerprint(files):

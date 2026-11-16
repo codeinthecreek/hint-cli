@@ -80,6 +80,8 @@ has "hosts, IPs and quoting merge into one row" "$idx" \
   "ssh-keygen -f '/home/user/.ssh/known_hosts' -R <HOST>	remove offending ECDSA key	x4"
 has "varying paths keep their common directory" "$idx" "tail -f /var/log/<PATH>		x3"
 has "file names become <FILE>" "$idx" "tar -czf <FILE> docs		x2"
+has "varying quoted strings become <STR>, not bare words" "$idx" \
+  "ssh-keygen -t ed25519 -f ~/.ssh/<PATH> -C <STR>		x2"
 has "python -m module name is not a host" "$idx" "python3 -m http.server 8000		x2"
 has "flags kept as written: +short is its own row" "$idx" "dig +short <HOST>		x3"
 has "note on a minority variant stays off the row" "$idx" "mkdir <PATH>		x6"
