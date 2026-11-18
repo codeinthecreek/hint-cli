@@ -33,6 +33,28 @@ notes, in the form the user actually uses. Nothing is ever executed.
    hits vs 27 at tool weight 0.3, one suggestion instead of three, the rsync
    example lost at weight 0.6) did not justify a prompt change.
 
+   **Different tools when unsure.** The system message ends with "If you
+   are not sure which tool fits, use a different tool on each line." With
+   the prompt before it the model nearly always gave one command (121 of
+   163 eval questions), so a wrong tool guess hid the user's row; a wrong
+   tool guess was behind 26 of 30 misses (2026-11-18, benchmark and
+   hold-out). With the sentence: 2 commands in most replies, the right tool
+   among the guesses in 61 of 89 questions instead of 58, and 4 questions
+   that showed nothing useful now do (none lost). The cost: 5 useful
+   answers move down from the first line (3 move up), noise more in 14
+   questions and less in 9. The model is not fully repeatable at
+   temperature 0 (re-asking changed the guesses of 17 of 163 questions),
+   so differences of a few questions are within noise.
+
+   Tried and rejected 2026-11-18, same questions: "Use a different tool on
+   each line" always (same 4 fixed, slightly more useful answers moved
+   down and more noise); a worked example with 3 commands of 3 tools, with
+   and without the sentence, and with a second example showing 3 forms of a
+   named tool. The examples made the model fill all 3 lines, mostly with
+   the same tool (replies repeating a tool 23 -> 56 to 100), fixed the
+   same few questions and added noise (more in up to 27 questions); the
+   second example lost "how do I shut down kubernetes".
+
    **When the model fails**, the two cases are reported differently:
    - **No connection** (Ollama not running, wrong host, timeout, or an
      error from Ollama such as an unknown model): hint says which, names

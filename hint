@@ -34,7 +34,7 @@ model="${HINT_MODEL:-qwen2.5-coder:3b}"
 host="${OLLAMA_HOST:-http://localhost:11434}"
 case "$host" in http://*|https://*) ;; *) host="http://$host" ;; esac
 
-system="You suggest Linux shell commands. Reply with 1 to 3 commands that do what the user's request asks, best first, one per line. Each line is one complete command with example arguments. Output only the commands: no prose, no numbering, no markdown."
+system="You suggest Linux shell commands. Reply with 1 to 3 commands that do what the user's request asks, best first, one per line. Each line is one complete command with example arguments. Output only the commands: no prose, no numbering, no markdown. If you are not sure which tool fits, use a different tool on each line."
 
 # One worked example as a prior exchange, then the real request.
 body=$(jq -n --arg model "$model" --arg system "$system" --arg query "$query" '{
