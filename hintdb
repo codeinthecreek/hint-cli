@@ -13,13 +13,13 @@ temp file that atomically replaces the DB, because dedup is global across source
   hintdb update                                      rebuild only if sources changed
   hintdb find [--debug] -q QUESTION [GUESS...]       the user's rows for a question
                                                      (used by hint)
-  hintdb query [-n N] [--no-update] WORDS...         keyword search (debugging)
+  hintdb query [-n N] [--no-update] WORDS...         find's ranking for the words
+                                                     alone, with scores (debugging)
   hintdb stats                                       row counts, for checking dedup
 
 Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
-separate man.db, rebuilt only when man-db's index changes. A query matching
-"DNS lookup" finds `dig - DNS lookup utility` and then pulls in the user's own
-`dig` rows. Set HINTDB_NO_MAN=1 to disable.
+separate man.db, rebuilt only when man-db's index changes; used for the summary
+on model-suggested tools and listed by `query`. Set HINTDB_NO_MAN=1 to disable.
 """
 import argparse
 import glob
@@ -713,63 +713,30 @@ def coverage(terms, text):
     return hit / len(terms)
 
 
-ENTRY_COLS = "display, examples, dnote, count, recency, kind, cmdword"
-# bm25 column weights: prog, args, data, variants, hnote, nnote
-ENTRY_BM25 = "bm25(entries, 4.0, 1.0, 0.2, 0.2, 2.0, 2.0)"
 MAN_HITS = 5        # man pages per query
-MAN_EXPAND = 3      # user's own rows pulled in per man page
 MAN_MIN_COVERAGE = 0.5   # a man hit must match at least half the query terms
 
 
 def query(text, n):
-    """Two-stage: FTS over the user's entries and over man NAME lines; then each
-    man hit pulls in the user's own rows for that command. Ordered by how many
-    query terms a row covers (command word, args and notes only, so a term
-    that appears only in a grep pattern or path counts for less), then user's
-    rows before man rows, then score."""
+    """Keyword search, for debugging: the user's rows ranked by find's score
+    for the question alone (bm25 of its words, use count as tie-breaker; no
+    model guesses, so no tool, flag or guess-word parts), each with its score;
+    then man NAME lines that match at least half the question's words."""
     terms = query_terms(text)
-    if not terms or not os.path.exists(DB):
+    if not terms:
         return []
-    q = " OR ".join('"%s"' % t.replace('"', '""') for t in terms)
-    con = sqlite3.connect(DB)
-    cands = []
+    con = open_db()
     try:
-        for r in con.execute(
-                f"SELECT {ENTRY_COLS}, prog || ' ' || args || ' ' || hnote || ' ' || nnote, {ENTRY_BM25} "
-                f"FROM entries WHERE entries MATCH ? ORDER BY {ENTRY_BM25} LIMIT ?",
-                (q, max(n * 4, 40))):
-            entry, covtext, bm = r[:7], r[7], r[8]
-            count, recency, kind = entry[3], entry[4], entry[5]
-            score = bm - 0.3 * math.log(count) - 0.5 * recency - (0.3 if kind == "note" else 0)
-            cands.append((-coverage(terms, covtext), 0, score, "entry", entry))
+        r = score_rows(con, text, [], lambda msg: None)
+        out = ["%5.2f  %s" % (x[0], fmt((x[7], x[8], x[9], x[5]))) for x in r["scored"][:n]]
         if os.path.exists(MANDB):
+            q = " OR ".join('"%s"' % p for t in terms for p in fts_words(t))
             con.execute("ATTACH DATABASE ? AS man", (MANDB,))
-            for name, desc, sec, bm in con.execute(
-                    "SELECT name, desc, section, bm25(pages, 2.0, 1.0) FROM man.pages "
-                    "WHERE pages MATCH ? ORDER BY bm25(pages, 2.0, 1.0) LIMIT ?", (q, MAN_HITS)):
-                cov = coverage(terms, name + " " + desc)
-                if cov >= MAN_MIN_COVERAGE:
-                    cands.append((-cov, 1, bm, "man", (name, desc, sec)))
-        cands.sort(key=lambda c: c[:3])
-
-        out, seen = [], set()
-
-        def emit(entry):
-            if entry[0] not in seen and len(out) < n:
-                seen.add(entry[0])
-                out.append(fmt(entry))
-
-        for *_, typ, row in cands:
-            if len(out) >= n:
-                break
-            if typ == "entry":
-                emit(row)
-                continue
-            name, desc, sec = row
-            out.append(f"{name}  # {desc}  [man {name}({sec})]")
-            for e in con.execute(f"SELECT {ENTRY_COLS} FROM entries WHERE cmdword = ? "
-                                 "ORDER BY count DESC LIMIT ?", (name, MAN_EXPAND)):
-                emit(e)
+            for name, desc, sec in con.execute(
+                    "SELECT name, desc, section FROM man.pages WHERE pages MATCH ? "
+                    "ORDER BY bm25(pages, 2.0, 1.0) LIMIT ?", (q, MAN_HITS)):
+                if coverage(terms, name + " " + desc) >= MAN_MIN_COVERAGE:
+                    out.append(f"man    {name}({sec}): {desc}")
     finally:
         con.close()
     return out
@@ -803,20 +770,60 @@ def jaccard(sa, sb):
     return len(sa & sb) / len(sa | sb)
 
 
-def flag_set(tokens):
-    """-x, --long (value after '=' dropped) and dig-style +opt tokens."""
-    return {t.split("=", 1)[0] for t in tokens if len(t) > 1 and t[0] in "-+"}
+_BUNDLES = None
 
 
-def overlap(guess_shape, row_shape):
-    """(primary, all): primary is the overlap of option flags, ignoring values,
-    or of all tokens when the guess has no flags; all is the overlap of all
-    argument tokens (tool word excluded). Shapes are compared, so values are
-    already placeholders."""
+def single_flags():
+    """tool -> the single-letter flags the user typed alone with it (`grep -r`,
+    `grep -i`), from the index. A multi-letter single-dash token of that tool
+    is a bundle of short flags only if all its letters are among them, so
+    `grep -ri` counts as `-r -i` while `find -name` stays whole (no
+    `find -n -a -m -e`)."""
+    global _BUNDLES
+    if _BUNDLES is None:
+        _BUNDLES = {}
+        if os.path.exists(DB):
+            try:
+                for shp, cw in sqlite3.connect(DB).execute("SELECT shape, cmdword FROM entries"):
+                    for t in shp.split()[1:]:
+                        if re.fullmatch(r"-[A-Za-z]", t):
+                            _BUNDLES.setdefault(cw, set()).add(t[1])
+            except sqlite3.Error:
+                pass
+    return _BUNDLES
+
+
+def flag_set(tokens, tool=None):
+    """-x, --long (value after '=' dropped) and dig-style +opt tokens (a letter
+    after the +: `+short`, not `find -mtime +30`). With the row's tool, a
+    bundle of short flags counts as its letters (see single_flags())."""
+    out = set()
+    for t in tokens:
+        if len(t) < 2 or t[0] not in "-+" or (t[0] == "+" and not t[1].isalpha()):
+            continue
+        if (tool and re.fullmatch(r"-[A-Za-z]{2,}", t)
+                and set(t[1:]) <= single_flags().get(tool, set())):
+            out |= {"-" + c for c in t[1:]}
+        else:
+            out.add(t.split("=", 1)[0])
+    return out
+
+
+def overlap(guess_shape, row_shape, tool=None):
+    """(primary, all): primary is the overlap of option flags, ignoring values;
+    when the guess has no flags, of its plain words (`compose down`, `get
+    pods`), not placeholders, so `ssh user@host` gives no credit to every
+    `ssh <USER@HOST>` row; 0 when it has neither. all is the overlap of all
+    argument tokens (tool word excluded), a tie-breaker. Shapes are compared,
+    so values are already placeholders."""
     ga, ra = guess_shape.split()[1:], row_shape.split()[1:]
     all_ = jaccard(set(ga), set(ra))
-    gf = flag_set(ga)
-    primary = jaccard(gf, flag_set(ra)) if gf else all_
+    gf = flag_set(ga, tool)
+    if gf:
+        primary = jaccard(gf, flag_set(ra, tool))
+    else:
+        gl = literal_words(guess_shape)
+        primary = jaccard(gl, literal_words(row_shape)) if gl else 0.0
     return primary, all_
 
 
@@ -861,7 +868,7 @@ def show_key(cmdword, shp):
     tool, flags and literal words, and the same paths with a trailing / (it
     changes meaning: rsync source, symlinked directories)."""
     toks = shp.split()[1:]
-    return (cmdword, frozenset(flag_set(toks)), frozenset(literal_words(shp)),
+    return (cmdword, frozenset(flag_set(toks, cmdword)), frozenset(literal_words(shp)),
             tuple(t.endswith("/") for t in toks if "<" in t or "/" in t))
 
 
@@ -907,15 +914,11 @@ def rows_with(con, term, cols=None):
     return {r for (r,) in con.execute("SELECT rowid FROM entries WHERE entries MATCH ?", (m,))}
 
 
-def find(text, guesses, debug=False):
-    """The user's rows for the question `text`, scored by bm25 of its words
-    plus the guesses' tools, flags and words; then the model's guesses. Two
-    lines per result: command, status. Returns [] when nothing was found."""
-    def dbg(msg):
-        if debug:
-            print("hintdb: " + msg, file=sys.stderr)
-
-    guesses = list(dict.fromkeys(g for g in (norm(x) for x in guesses) if g))
+def score_rows(con, text, guesses, dbg):
+    """Score the user's rows for the question `text` and the model's guesses
+    (already normalised): bm25 of the question's words plus the guesses'
+    tools, flags and words. Returns the candidates, best first, and what was
+    used to score them. Shared by `find` and `query` (with no guesses)."""
     terms = query_terms(text)
     paths = path_mentioned(text)
     cols = None if paths else CMD_COLS
@@ -925,71 +928,91 @@ def find(text, guesses, debug=False):
         gwords += [w for w in guess_words(g) if w not in gwords]
     gshapes = [(tool_of(g), shape(g)) for g in guesses]
 
+    # Tool credit: 1.0 for the first guess's tool, 0.7 for later ones.
+    tool_w = {t: (1.0 if i == 0 else 0.7) for i, t in enumerate(tools)}
+    # A guessed tool `a-b` is also read as `a b` when the user's rows use
+    # that form (docker-compose -> docker compose). Decided by the user's
+    # rows, not a list of tools; it changes scoring only, not what is printed.
+    for g in guesses:
+        t = tool_of(g)
+        if "-" not in t:
+            continue
+        a, b = t.split("-", 1)
+        if not con.execute("SELECT 1 FROM entries WHERE cmdword = ? AND "
+                           "(args = ? OR args LIKE ?) LIMIT 1", (a, b, b + " %")).fetchone():
+            continue
+        tool_w.setdefault(a, tool_w[t])
+        gshapes.append((a, shape(norm(g).replace(t, a + " " + b, 1))))
+        if b not in gwords and b not in GENERIC and b not in STOP and len(b) > 2:
+            gwords.append(b)
+        dbg(f"guessed tool {t} also read as '{a} {b}' (the user's form)")
+    nrows = con.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+    idf, found = {}, {}
+    for t in terms + gwords:
+        if t not in idf:
+            idf[t] = math.log(1 + nrows / (1 + len(rows_with(con, t))))
+            found[t] = rows_with(con, t, cols)
+
+    # bm25 over any word of the question, scaled so the best row is 1.
+    bm = {}
+    parts = list(dict.fromkeys(p for t in terms for p in fts_words(t)))
+    if parts:
+        m = " OR ".join('"%s"' % p for p in parts)
+        if cols:
+            m = f"{cols} : ({m})"
+        bm = {rid: -s for rid, s in con.execute(
+            f"SELECT rowid, {FIND_BM25} FROM entries WHERE entries MATCH ?", (m,))}
+        best = max(bm.values(), default=0) or 1
+        bm = {rid: s / best for rid, s in bm.items()}
+
+    # Candidates: a question word OR a guessed tool.
+    cand = set().union(*(found[t] for t in terms)) if terms else set()
+    for t in tool_w:
+        cand |= {r for (r,) in con.execute(
+            "SELECT rowid FROM entries WHERE cmdword = ?", (t,))}
+    gtot = sum(idf[w] for w in gwords) or 1
+    scored = []
+    for rid in cand:
+        display, examples, dnote, shp, count, kind, sources, cmdword = con.execute(
+            "SELECT display, examples, dnote, shape, count, kind, sources, cmdword "
+            "FROM entries WHERE rowid = ?", (rid,)).fetchone()
+        tb = tool_w.get(cmdword, 0.0)
+        ov = [overlap(gs, shp, cmdword) for t, gs in gshapes if t == cmdword]
+        fl = max([o[0] for o in ov] or [0.0])
+        alltok = max([o[1] for o in ov] or [0.0])   # tie-breaker (trailing / etc.)
+        gw = sum(idf[w] for w in gwords if rid in found[w]) / gtot
+        q = bm.get(rid, 0.0)
+        s = q + W_TOOL * tb + W_FLAGS * fl + W_GUESS_WORDS * gw + W_COUNT * math.log(count)
+        scored.append((s, q, tb, fl, gw, count, rid, display, examples, dnote, shp,
+                       kind, sources, cmdword, alltok))
+    # Equal scores: the row closest to a guess in all its tokens first.
+    scored.sort(key=lambda x: (-round(x[0], 9), -x[14], -x[5], x[7]))
+    return dict(terms=terms, paths=paths, tools=tools, gwords=gwords, idf=idf,
+                found=found, scored=scored)
+
+
+def open_db():
     if not os.path.exists(DB):
         con = sqlite3.connect(":memory:")
         con.executescript(ENTRIES_SCHEMA)
-    else:
-        con = sqlite3.connect(DB)
+        return con
+    return sqlite3.connect(DB)
+
+
+def find(text, guesses, debug=False):
+    """The user's rows for the question `text`, scored by bm25 of its words
+    plus the guesses' tools, flags and words; then the model's guesses. Two
+    lines per result: command, status. Returns [] when nothing was found."""
+    def dbg(msg):
+        if debug:
+            print("hintdb: " + msg, file=sys.stderr)
+
+    guesses = list(dict.fromkeys(g for g in (norm(x) for x in guesses) if g))
+    con = open_db()
     try:
-        # Tool credit: 1.0 for the first guess's tool, 0.7 for later ones.
-        tool_w = {t: (1.0 if i == 0 else 0.7) for i, t in enumerate(tools)}
-        # A guessed tool `a-b` is also read as `a b` when the user's rows use
-        # that form (docker-compose -> docker compose). Decided by the user's
-        # rows, not a list of tools; it changes scoring only, not what is printed.
-        for g in guesses:
-            t = tool_of(g)
-            if "-" not in t:
-                continue
-            a, b = t.split("-", 1)
-            if not con.execute("SELECT 1 FROM entries WHERE cmdword = ? AND "
-                               "(args = ? OR args LIKE ?) LIMIT 1", (a, b, b + " %")).fetchone():
-                continue
-            tool_w.setdefault(a, tool_w[t])
-            gshapes.append((a, shape(norm(g).replace(t, a + " " + b, 1))))
-            if b not in gwords and b not in GENERIC and b not in STOP and len(b) > 2:
-                gwords.append(b)
-            dbg(f"guessed tool {t} also read as '{a} {b}' (the user's form)")
-        nrows = con.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-        idf, found = {}, {}
-        for t in terms + gwords:
-            if t not in idf:
-                idf[t] = math.log(1 + nrows / (1 + len(rows_with(con, t))))
-                found[t] = rows_with(con, t, cols)
-
-        # bm25 over any word of the question, scaled so the best row is 1.
-        bm = {}
-        parts = list(dict.fromkeys(p for t in terms for p in fts_words(t)))
-        if parts:
-            m = " OR ".join('"%s"' % p for p in parts)
-            if cols:
-                m = f"{cols} : ({m})"
-            bm = {rid: -s for rid, s in con.execute(
-                f"SELECT rowid, {FIND_BM25} FROM entries WHERE entries MATCH ?", (m,))}
-            best = max(bm.values(), default=0) or 1
-            bm = {rid: s / best for rid, s in bm.items()}
-
-        # Candidates: a question word OR a guessed tool.
-        cand = set().union(*(found[t] for t in terms)) if terms else set()
-        for t in tool_w:
-            cand |= {r for (r,) in con.execute(
-                "SELECT rowid FROM entries WHERE cmdword = ?", (t,))}
-        gtot = sum(idf[w] for w in gwords) or 1
-        scored = []
-        for rid in cand:
-            display, examples, dnote, shp, count, kind, sources, cmdword = con.execute(
-                "SELECT display, examples, dnote, shape, count, kind, sources, cmdword "
-                "FROM entries WHERE rowid = ?", (rid,)).fetchone()
-            tb = tool_w.get(cmdword, 0.0)
-            ov = [overlap(gs, shp) for t, gs in gshapes if t == cmdword]
-            fl = max([o[0] for o in ov] or [0.0])
-            alltok = max([o[1] for o in ov] or [0.0])   # tie-breaker (trailing / etc.)
-            gw = sum(idf[w] for w in gwords if rid in found[w]) / gtot
-            q = bm.get(rid, 0.0)
-            s = q + W_TOOL * tb + W_FLAGS * fl + W_GUESS_WORDS * gw + W_COUNT * math.log(count)
-            scored.append((s, q, tb, fl, gw, count, rid, display, examples, dnote, shp,
-                           kind, sources, cmdword, alltok))
-        # Equal scores: the row closest to a guess in all its tokens first.
-        scored.sort(key=lambda x: (-round(x[0], 9), -x[14], -x[5], x[7]))
+        r = score_rows(con, text, guesses, dbg)
+        terms, paths, tools, gwords = r["terms"], r["paths"], r["tools"], r["gwords"]
+        idf, found, scored = r["idf"], r["found"], r["scored"]
 
         dbg(f"words: {terms}" + ("  (path mentioned: values searched too)" if paths else ""))
         dbg(f"guessed tools: {tools}  guess words: {gwords}")

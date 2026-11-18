@@ -15,7 +15,7 @@ fix="$here/fixtures"
 
 tmp=$(mktemp -d)
 stub_pid=
-cleanup() { [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null; rm -rf "$tmp"; }
+cleanup() { [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null; rm -rf -- "${tmp:?}"; }
 trap cleanup EXIT
 
 # Run the repo's hint/hintdb, not installed copies.
@@ -23,7 +23,7 @@ mkdir -p "$tmp/bin"
 ln -s "$root/hint" "$tmp/bin/hint"
 ln -s "$root/hintdb" "$tmp/bin/hintdb"
 # Stub tools the fixtures use, so they count as installed here.
-for t in fakedock fakedock-compose; do
+for t in fakedock fakedock-compose FakeVM; do
   printf '#!/bin/sh\n' > "$tmp/bin/$t"; chmod +x "$tmp/bin/$t"
 done
 export PATH="$tmp/bin:$PATH"
@@ -162,8 +162,11 @@ has "man index skips non-command and POSIX pages" "$out" "man	7 pages"
 
 echo "== query (keyword search, debugging only)"
 out=$(hintdb query DNS lookup)
-line "man NAME line finds dig for 'DNS lookup'" "$out" 1 "dig  # DNS lookup utility  [man dig(1)]"
-has "man hit pulls in the user's own dig rows" "$out" "dig +short <HOST>  [x3"
+has "man NAME lines matching the words are listed" "$out" "man    dig(1): DNS lookup utility"
+line "the user's rows come first, with find's score" "$out" 1 " 1.01  resolvectl dns  [x2]"
+out=$(hintdb query -n 3 tunnel to postgres)
+line "query ranks like find on the words alone (history comment found)" "$out" 1 \
+  " 1.00  ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres"
 
 echo "== find"
 out=$(hintdb find -q "short dns lookup" "dig +short example.com" 2>&1)
@@ -256,8 +259,22 @@ else bad "a skipped tool-only row is not replaced by another row" "$out"; fi
 
 out=$(hintdb find -q "stop the containers" "fakedock-compose down" 2>&1)
 line "guessed a-b tool read as the user's 'a b' form: their row found" "$out" 3 "fakedock compose down"
+err=$(hintdb find --debug -q "log in" "ssh user@remote_host" 2>&1 >/dev/null)
+has "a guess without flags or plain words gives no flag credit" "$err" \
+  "1.0  0.00   1.00  x6      ssh user@<HOST>"
 err=$(hintdb find --debug -q "stop the containers" "fakedock-compose down" 2>&1 >/dev/null)
+has "a guess without flags: its plain words count as the flag overlap" "$err" \
+  "1.00   1.00  x1      fakedock compose down"
 has "--debug shows the a-b reading" "$err" "guessed tool fakedock-compose also read as 'fakedock compose'"
+
+err=$(hintdb find --debug -q "search ignoring case" "grep -ri todo src" 2>&1 >/dev/null)
+has "bundled short flags compared letter by letter (-ri as -r -i)" "$err" \
+  "1.0  1.00   0.26  x1      grep -r -i TODO src"
+err=$(hintdb find --debug -q "list files by name" "find . -name x.log -mtime +7" 2>&1 >/dev/null)
+has "find -name stays whole; +N values are not flags (2 of 3 flags)" "$err" \
+  "1.0  0.67   0.00  x1      find . -name \"*.log\" -mtime +30 -delete"
+err=$(hintdb find --debug -q "dns" "dig +short example.com" 2>&1 >/dev/null)
+has "dig-style +opt still counts as a flag" "$err" "1.0  1.00   1.00  x3      dig +short <HOST>"
 
 echo "== installed only"
 out=$(hintdb find -q "zzqq" "foozz --bar" 2>&1)
@@ -333,6 +350,26 @@ out=$(hint zzqq frobnicate 2>&1)
 status "empty reply, nothing found: exit 1" 1 $?
 has "empty reply, nothing found: asks to rephrase" "$out" \
   "Sorry, I didn't understand your question, can you rephrase it?"
+
+printf '%s\n' "I'm sorry, but I can't assist with that request." > "$reply"
+out=$(hint zzqq frobnicate 2>&1)
+has "prose-only reply: asks to rephrase" "$out" \
+  "Sorry, I didn't understand your question, can you rephrase it?"
+lacks "prose-only reply: prose not shown as a model suggestion" "$out" "assist"
+
+printf '%s\n' 'Alternatively, you can use:' '**Option 1:**' '# replace the host' \
+  'dig +short example.com' 'FakeVM list vms' 'Unfortunately, that needs root.' \
+  'nslookup example.com' 'host example.com' > "$reply"
+out=$(hint short dns lookup 2>&1)
+has "prose, bold and comment lines dropped: first command kept" "$out" "dig +short <HOST>"
+lacks "prose line dropped" "$out" "Alternatively"
+lacks "bold line dropped" "$out" "Option 1"
+lacks "comment line dropped" "$out" "replace the host"
+has "installed command starting with a capital kept" "$out" "FakeVM list vms"
+has "prose does not use up guess slots (third command kept)" "$out" "nslookup example.com"
+lacks "still at most 3 guesses" "$out" "host example.com"
+err=$(HINT_DEBUG=1 hint short dns lookup 2>&1 >/dev/null)
+has "HINT_DEBUG: dropped prose shown" "$err" "hint: not a command, dropped: Alternatively, you can use:"
 
 printf '%s\n' '```' '```' > "$reply"
 out=$(hint zzqq frobnicate 2>&1)

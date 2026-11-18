@@ -136,7 +136,7 @@ ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 | `hintdb update` | rebuild only if something changed |
 | `hintdb stats` | entries per kind and man page count, for checking dedup |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
-| `hintdb query [-n N] WORDS...` | keyword search over the index (debugging; not used by `hint`) |
+| `hintdb query [-n N] WORDS...` | `find`'s ranking for the words alone, with scores, then matching man pages (debugging; not used by `hint`) |
 
 Source kinds are detected from the file name. Use `--kind` to override, e.g. for
 an old history file:
@@ -176,8 +176,10 @@ To measure hint on your own queries with a real model, see
 
 - Hosts without a dot (`ssh myserver`) aren't recognised as hosts, so each one
   stays a separate row.
-- Bundled short flags aren't split: `grep -ri` and `grep -r -i` count as
-  different flags.
+- Bundled short flags are compared letter by letter only for letters you have
+  also typed alone with that tool: `grep -ri` matches `grep -r -i` once your
+  history has `grep -r` and `grep -i`. So `find -name` is never split, but a
+  bundle whose letters you never typed alone (`rsync -avz`) stays whole.
 - Long and short forms of the same option (`-r`, `--recursive`) aren't treated
   as equal.
 - When the model's first guess has the same shape as one of your rows, it is
@@ -365,8 +367,9 @@ Data flow from sources to the printed answer, traced with the example query
 
  DEBUG ONLY
  ============================================================================
-  hintdb query WORDS   keyword search (FTS5 + man NAME lines) over the same
-                       index; no longer used by hint
+  hintdb query WORDS   find's ranking for the words alone (no model guesses),
+                       with scores, then matching man NAME lines; not used
+                       by hint
   hintdb stats         rows per kind, man page count
 ```
 
