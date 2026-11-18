@@ -62,3 +62,7 @@ fakedock compose up -d
 fakedock compose up -d
 fakedock compose down
 fakedock ps
+grep -r -i TODO src
+grep -r foo .
+grep -i bar notes.txt
+find . -name "*.log" -mtime +30 -delete

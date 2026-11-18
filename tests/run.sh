@@ -267,6 +267,15 @@ has "a guess without flags: its plain words count as the flag overlap" "$err" \
   "1.00   1.00  x1      fakedock compose down"
 has "--debug shows the a-b reading" "$err" "guessed tool fakedock-compose also read as 'fakedock compose'"
 
+err=$(hintdb find --debug -q "search ignoring case" "grep -ri todo src" 2>&1 >/dev/null)
+has "bundled short flags compared letter by letter (-ri as -r -i)" "$err" \
+  "1.0  1.00   0.26  x1      grep -r -i TODO src"
+err=$(hintdb find --debug -q "list files by name" "find . -name x.log -mtime +7" 2>&1 >/dev/null)
+has "find -name stays whole; +N values are not flags (2 of 3 flags)" "$err" \
+  "1.0  0.67   0.00  x1      find . -name \"*.log\" -mtime +30 -delete"
+err=$(hintdb find --debug -q "dns" "dig +short example.com" 2>&1 >/dev/null)
+has "dig-style +opt still counts as a flag" "$err" "1.0  1.00   1.00  x3      dig +short <HOST>"
+
 echo "== installed only"
 out=$(hintdb find -q "zzqq" "foozz --bar" 2>&1)
 line "uninstalled guess, nothing else: says so" "$out" 1 \

@@ -770,12 +770,46 @@ def jaccard(sa, sb):
     return len(sa & sb) / len(sa | sb)
 
 
-def flag_set(tokens):
-    """-x, --long (value after '=' dropped) and dig-style +opt tokens."""
-    return {t.split("=", 1)[0] for t in tokens if len(t) > 1 and t[0] in "-+"}
+_BUNDLES = None
 
 
-def overlap(guess_shape, row_shape):
+def single_flags():
+    """tool -> the single-letter flags the user typed alone with it (`grep -r`,
+    `grep -i`), from the index. A multi-letter single-dash token of that tool
+    is a bundle of short flags only if all its letters are among them, so
+    `grep -ri` counts as `-r -i` while `find -name` stays whole (no
+    `find -n -a -m -e`)."""
+    global _BUNDLES
+    if _BUNDLES is None:
+        _BUNDLES = {}
+        if os.path.exists(DB):
+            try:
+                for shp, cw in sqlite3.connect(DB).execute("SELECT shape, cmdword FROM entries"):
+                    for t in shp.split()[1:]:
+                        if re.fullmatch(r"-[A-Za-z]", t):
+                            _BUNDLES.setdefault(cw, set()).add(t[1])
+            except sqlite3.Error:
+                pass
+    return _BUNDLES
+
+
+def flag_set(tokens, tool=None):
+    """-x, --long (value after '=' dropped) and dig-style +opt tokens (a letter
+    after the +: `+short`, not `find -mtime +30`). With the row's tool, a
+    bundle of short flags counts as its letters (see single_flags())."""
+    out = set()
+    for t in tokens:
+        if len(t) < 2 or t[0] not in "-+" or (t[0] == "+" and not t[1].isalpha()):
+            continue
+        if (tool and re.fullmatch(r"-[A-Za-z]{2,}", t)
+                and set(t[1:]) <= single_flags().get(tool, set())):
+            out |= {"-" + c for c in t[1:]}
+        else:
+            out.add(t.split("=", 1)[0])
+    return out
+
+
+def overlap(guess_shape, row_shape, tool=None):
     """(primary, all): primary is the overlap of option flags, ignoring values;
     when the guess has no flags, of its plain words (`compose down`, `get
     pods`), not placeholders, so `ssh user@host` gives no credit to every
@@ -784,9 +818,9 @@ def overlap(guess_shape, row_shape):
     so values are already placeholders."""
     ga, ra = guess_shape.split()[1:], row_shape.split()[1:]
     all_ = jaccard(set(ga), set(ra))
-    gf = flag_set(ga)
+    gf = flag_set(ga, tool)
     if gf:
-        primary = jaccard(gf, flag_set(ra))
+        primary = jaccard(gf, flag_set(ra, tool))
     else:
         gl = literal_words(guess_shape)
         primary = jaccard(gl, literal_words(row_shape)) if gl else 0.0
@@ -834,7 +868,7 @@ def show_key(cmdword, shp):
     tool, flags and literal words, and the same paths with a trailing / (it
     changes meaning: rsync source, symlinked directories)."""
     toks = shp.split()[1:]
-    return (cmdword, frozenset(flag_set(toks)), frozenset(literal_words(shp)),
+    return (cmdword, frozenset(flag_set(toks, cmdword)), frozenset(literal_words(shp)),
             tuple(t.endswith("/") for t in toks if "<" in t or "/" in t))
 
 
@@ -943,7 +977,7 @@ def score_rows(con, text, guesses, dbg):
             "SELECT display, examples, dnote, shape, count, kind, sources, cmdword "
             "FROM entries WHERE rowid = ?", (rid,)).fetchone()
         tb = tool_w.get(cmdword, 0.0)
-        ov = [overlap(gs, shp) for t, gs in gshapes if t == cmdword]
+        ov = [overlap(gs, shp, cmdword) for t, gs in gshapes if t == cmdword]
         fl = max([o[0] for o in ov] or [0.0])
         alltok = max([o[1] for o in ov] or [0.0])   # tie-breaker (trailing / etc.)
         gw = sum(idf[w] for w in gwords if rid in found[w]) / gtot

@@ -122,7 +122,16 @@ notes, in the form the user actually uses. Nothing is ever executed.
       other weights keep their meaning.
 
       Flag overlap: the share of option flags (`-x`, `--long`, `+opt`,
-      values after `=` ignored) the row and the guess have in common. When
+      values after `=` ignored) the row and the guess have in common. A
+      `+` token is a flag only with a letter after it (`dig +short`, not
+      `find -mtime +30`). Bundled short flags count as their letters
+      (`grep -ri` as `-r -i`) when the user typed each letter alone with
+      that tool: learned from the index, so `find -name` stays whole. Same
+      for showing rows once. Added 2026-11-18: on the eval sets only two
+      `usermod` rows changed places (11 of 7451 rows merge for display); a
+      rule per tool (split all of a tool's tokens once one qualifies) split
+      `find -name` inside `docker exec` rows, attached values (`-XPOST`)
+      and typos, and was not taken. When
       the guess has no flags, the share of its plain words (subcommands such
       as `compose down`, `get pods`; not placeholders), and 0 when it has
       none. Until 2026-11-18 a guess without flags compared all tokens, so a

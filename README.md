@@ -176,8 +176,10 @@ To measure hint on your own queries with a real model, see
 
 - Hosts without a dot (`ssh myserver`) aren't recognised as hosts, so each one
   stays a separate row.
-- Bundled short flags aren't split: `grep -ri` and `grep -r -i` count as
-  different flags.
+- Bundled short flags are compared letter by letter only for letters you have
+  also typed alone with that tool: `grep -ri` matches `grep -r -i` once your
+  history has `grep -r` and `grep -i`. So `find -name` is never split, but a
+  bundle whose letters you never typed alone (`rsync -avz`) stays whole.
 - Long and short forms of the same option (`-r`, `--recursive`) aren't treated
   as equal.
 - When the model's first guess has the same shape as one of your rows, it is
