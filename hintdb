@@ -809,14 +809,20 @@ def flag_set(tokens):
 
 
 def overlap(guess_shape, row_shape):
-    """(primary, all): primary is the overlap of option flags, ignoring values,
-    or of all tokens when the guess has no flags; all is the overlap of all
-    argument tokens (tool word excluded). Shapes are compared, so values are
-    already placeholders."""
+    """(primary, all): primary is the overlap of option flags, ignoring values;
+    when the guess has no flags, of its plain words (`compose down`, `get
+    pods`), not placeholders, so `ssh user@host` gives no credit to every
+    `ssh <USER@HOST>` row; 0 when it has neither. all is the overlap of all
+    argument tokens (tool word excluded), a tie-breaker. Shapes are compared,
+    so values are already placeholders."""
     ga, ra = guess_shape.split()[1:], row_shape.split()[1:]
     all_ = jaccard(set(ga), set(ra))
     gf = flag_set(ga)
-    primary = jaccard(gf, flag_set(ra)) if gf else all_
+    if gf:
+        primary = jaccard(gf, flag_set(ra))
+    else:
+        gl = literal_words(guess_shape)
+        primary = jaccard(gl, literal_words(row_shape)) if gl else 0.0
     return primary, all_
 
 

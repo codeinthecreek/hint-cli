@@ -121,9 +121,17 @@ notes, in the form the user actually uses. Nothing is ever executed.
       other weights keep their meaning.
 
       Flag overlap: the share of option flags (`-x`, `--long`, `+opt`,
-      values after `=` ignored) the row and the guess have in common, or of
-      all argument tokens when the guess has no flags (the old `match`
-      score).
+      values after `=` ignored) the row and the guess have in common. When
+      the guess has no flags, the share of its plain words (subcommands such
+      as `compose down`, `get pods`; not placeholders), and 0 when it has
+      none. Until 2026-11-18 a guess without flags compared all tokens, so a
+      guess `ssh user@remote_host` gave full credit to the user's most
+      generic `ssh <USER@HOST>` row (x894, under "connect to postgres").
+      Plain words only: benchmark exact first +4, useful first +3, none
+      lost; hold-out one useful first answer lost ("generate random
+      passwords": the user's `xkcdpass` row comes first and `pwgen` third,
+      accepted); no flag credit at all for such guesses lost "stop docker
+      compose" and "show pods".
 
       A history comment is written on purpose, about a command just run, in
       the user's own words: the same words they later type into hint. Text

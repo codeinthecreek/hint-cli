@@ -256,7 +256,12 @@ else bad "a skipped tool-only row is not replaced by another row" "$out"; fi
 
 out=$(hintdb find -q "stop the containers" "fakedock-compose down" 2>&1)
 line "guessed a-b tool read as the user's 'a b' form: their row found" "$out" 3 "fakedock compose down"
+err=$(hintdb find --debug -q "log in" "ssh user@remote_host" 2>&1 >/dev/null)
+has "a guess without flags or plain words gives no flag credit" "$err" \
+  "1.0  0.00   1.00  x6      ssh user@<HOST>"
 err=$(hintdb find --debug -q "stop the containers" "fakedock-compose down" 2>&1 >/dev/null)
+has "a guess without flags: its plain words count as the flag overlap" "$err" \
+  "1.00   1.00  x1      fakedock compose down"
 has "--debug shows the a-b reading" "$err" "guessed tool fakedock-compose also read as 'fakedock compose'"
 
 echo "== installed only"
