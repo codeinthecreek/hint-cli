@@ -136,7 +136,7 @@ ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 | `hintdb update` | rebuild only if something changed |
 | `hintdb stats` | entries per kind and man page count, for checking dedup |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
-| `hintdb query [-n N] WORDS...` | keyword search over the index (debugging; not used by `hint`) |
+| `hintdb query [-n N] WORDS...` | `find`'s ranking for the words alone, with scores, then matching man pages (debugging; not used by `hint`) |
 
 Source kinds are detected from the file name. Use `--kind` to override, e.g. for
 an old history file:
@@ -365,8 +365,9 @@ Data flow from sources to the printed answer, traced with the example query
 
  DEBUG ONLY
  ============================================================================
-  hintdb query WORDS   keyword search (FTS5 + man NAME lines) over the same
-                       index; no longer used by hint
+  hintdb query WORDS   find's ranking for the words alone (no model guesses),
+                       with scores, then matching man NAME lines; not used
+                       by hint
   hintdb stats         rows per kind, man page count
 ```
 

@@ -14,8 +14,9 @@ notes, in the form the user actually uses. Nothing is ever executed.
   passes the query and the guesses to `hintdb find`.
 - `hintdb` (Python, single file, stdlib only): builds the index from history,
   notes, justfiles and man NAME lines, and finds the user's rows for a query.
-  `hintdb find --debug` shows the score parts. `hintdb query` (keyword search,
-  no model guesses) stays for debugging. `hintdb match` (guesses only, by
+  `hintdb find --debug` shows the score parts. `hintdb query` stays for
+  debugging: `find`'s ranking for the words alone (no model guesses), each
+  row with its score, then matching man NAME lines. `hintdb match` (guesses only, by
   flag overlap) is dropped: `find` replaces it, and its flag overlap is one
   of `find`'s score parts.
 
@@ -284,20 +285,23 @@ the user's questions phrased as they would really ask them (12). Tuning
 stops where changes only trade a few hits between sets: real use decides
 the rest.
 
-Results with today's design (2026-11-18, on the 2026-11-17 index copy),
-exact first / useful first / not shown / junk / noise: benchmark
-34 / 56 / 14 / 94 / 276, hold-out 19 / 48 / 18 / 117 / 220, questions
-7 / 7 / 1 / 14 / 42. Which tools are installed changes these: rows of a
-tool installed later show up (`psql`, installed 2026-11-18, moved the
-benchmark to 34 / 55 / 13 and questions to 6 / 6 / 1).
+Results with today's design (2026-11-18: a snapshot of the current index
+and sources, with `psql` installed; guesses from the current prompt), exact
+first / useful first / not shown / junk / noise: benchmark (77)
+36 / 56 / 10 / 85 / 265, hold-out (82) 24 / 50 / 17 / 123 / 232, questions
+(12) 7 / 9 / 0 / 6 / 38. These change with the index and with what is
+installed: rows of a tool installed later show up. The hold-out is rebuilt
+from the snapshot's history comments, and each comment is hidden from
+history and notes text while tested (notes files may repeat it).
 
-Where the misses are (2026-11-18, benchmark, no useful line printed, 15):
-the expected command is not in the index 3; it is not a candidate (in all
-but one case the model guessed the wrong tool and the row lacks the
-question's words) 4; it is a candidate ranked too low 7 (`docker`, `git`,
-`kubectl` subcommands among many rows of the tool; a neighbouring tool
-guessed); hidden by a row of the same shape 1. In the hold-out most misses
-(11 of 18) are label-like comments the model cannot interpret.
+Where the misses are (same run; no useful line printed): benchmark 10. The
+expected command is not in the index 4 (`iptables`, never used; two Slurm
+questions; the `psql` connect forms the eval accepts); it is not a
+candidate 2 (the model guessed the wrong tool and the row lacks the
+question's words); it is a candidate ranked too low 4 (`docker` and
+`kubectl` subcommands among many rows of the tool; `tail` guessed for a
+`just` recipe). Hold-out 17, all with the wrong tool guessed: mostly
+label-like comments the model cannot interpret.
 
 ## Tried and rejected
 
@@ -355,6 +359,25 @@ word):
   word): useful first a tie (benchmark -2, hold-out +1), noise slightly
   worse (benchmark 291 -> 300). Reordering cannot reduce noise while the
   list is always refilled; "Tool-only rows once" does.
+
+2026-11-18, hosts without a dot (`ssh myserver` stays a literal word, so
+each host is its own row): no source of host names separates hosts from
+other words, so the limitation stays (README).
+
+- **`~/.ssh/config` aliases (+ unhashed `known_hosts`):** precise, but much
+  of the history is from older ssh configs whose aliases are gone.
+- **Names typed as `user@NAME` in history, everywhere:** 277 rows -> 133,
+  but the user's hosts include ordinary words (`ubuntu`, `gpu`, `github`),
+  so `docker pull ubuntu` would become `docker pull <HOST>`.
+- **Host positions learned from the user's `user@host` uses:** too broad
+  (`user@1000.service` gives `systemctl` a "host" position) or, when a
+  position must hold mostly hosts, circular (most `ssh` first arguments
+  are dotless hosts, so `ssh` does not qualify: 4 rows).
+- **Both together:** 136 rows -> 39, 84 of them `ssh`, but still `grep`,
+  `ack`, `rm` rows and ordinary words.
+- **A fixed rule (`ssh`'s first plain argument is the host):** exact, but a
+  per-tool rule; not needed while "Tool-only rows once" already shows at
+  most one plain `ssh <host>` per lookup.
 
 ## Index
 

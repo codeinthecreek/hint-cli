@@ -162,8 +162,11 @@ has "man index skips non-command and POSIX pages" "$out" "man	7 pages"
 
 echo "== query (keyword search, debugging only)"
 out=$(hintdb query DNS lookup)
-line "man NAME line finds dig for 'DNS lookup'" "$out" 1 "dig  # DNS lookup utility  [man dig(1)]"
-has "man hit pulls in the user's own dig rows" "$out" "dig +short <HOST>  [x3"
+has "man NAME lines matching the words are listed" "$out" "man    dig(1): DNS lookup utility"
+line "the user's rows come first, with find's score" "$out" 1 " 1.01  resolvectl dns  [x2]"
+out=$(hintdb query -n 3 tunnel to postgres)
+line "query ranks like find on the words alone (history comment found)" "$out" 1 \
+  " 1.00  ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres"
 
 echo "== find"
 out=$(hintdb find -q "short dns lookup" "dig +short example.com" 2>&1)
