@@ -68,16 +68,34 @@ raw=$(jq -r '.message.content // empty' <<<"$resp")
 [ -n "${HINT_DEBUG:-}" ] && printf 'hint: model guesses:\n%s\n' "$raw" >&2
 
 # Clean model output: drop fences and blank lines, strip "$ " prompts,
-# numbering and bullets; keep at most 3 lines.
-mapfile -t guesses < <(
+# numbering and bullets.
+mapfile -t lines < <(
   printf '%s\n' "$raw" |
   sed -E -e '/^[[:space:]]*```/d' \
          -e 's/^[[:space:]]*([0-9]+[.)]|[-*])[[:space:]]+//' \
          -e 's/^[[:space:]]*\$[[:space:]]+//' \
          -e 's/^[[:space:]]+|[[:space:]]+$//g' \
-         -e '/^$/d' |
-  head -n 3
+         -e '/^$/d'
 )
+# Drop prose ("I'm sorry, ...", "Alternatively, ..."), markdown bold and
+# "#" comment lines: a line starting with "#" or "**", or whose first word
+# starts with a capital letter and is not an installed command (VBoxManage
+# is kept). Keep the first 3 lines left.
+guesses=()
+for line in "${lines[@]}"; do
+  first=${line%%[[:space:]]*}
+  case "$line" in
+    '#'*|'**'*) prose=1 ;;
+    [[:upper:]]*) command -v -- "$first" >/dev/null 2>&1 && prose= || prose=1 ;;
+    *) prose= ;;
+  esac
+  if [ -n "$prose" ]; then
+    [ -n "${HINT_DEBUG:-}" ] && printf 'hint: not a command, dropped: %s\n' "$line" >&2
+    continue
+  fi
+  guesses+=("$line")
+  [ ${#guesses[@]} -ge 3 ] && break
+done
 
 # No usable guesses: still look up the request's own words (a history
 # comment may answer it).

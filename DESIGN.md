@@ -60,7 +60,12 @@ notes, in the form the user actually uses. Nothing is ever executed.
      error from Ollama such as an unknown model): hint says which, names
      the host and model, and exits 1. It is a setup problem, not a question
      to rephrase.
-   - **Nothing usable** (empty reply, or nothing left after cleaning): the
+   - **Nothing usable** (empty reply, or nothing left after cleaning;
+     cleaning drops prose such as "I'm sorry, but I can't assist with
+     that", markdown bold and `#` comment lines: a line starting with `#`
+     or `**`, or whose first word starts with a capital letter and is not
+     an installed command, so `VBoxManage` stays; the first 3 lines left
+     are the guesses): the
      lookup still runs on the query words alone, since the user's history
      comments may answer it. If nothing at all is printed, hint says
      "Sorry, I didn't understand your question, can you rephrase it?".

@@ -23,7 +23,7 @@ mkdir -p "$tmp/bin"
 ln -s "$root/hint" "$tmp/bin/hint"
 ln -s "$root/hintdb" "$tmp/bin/hintdb"
 # Stub tools the fixtures use, so they count as installed here.
-for t in fakedock fakedock-compose; do
+for t in fakedock fakedock-compose FakeVM; do
   printf '#!/bin/sh\n' > "$tmp/bin/$t"; chmod +x "$tmp/bin/$t"
 done
 export PATH="$tmp/bin:$PATH"
@@ -333,6 +333,26 @@ out=$(hint zzqq frobnicate 2>&1)
 status "empty reply, nothing found: exit 1" 1 $?
 has "empty reply, nothing found: asks to rephrase" "$out" \
   "Sorry, I didn't understand your question, can you rephrase it?"
+
+printf '%s\n' "I'm sorry, but I can't assist with that request." > "$reply"
+out=$(hint zzqq frobnicate 2>&1)
+has "prose-only reply: asks to rephrase" "$out" \
+  "Sorry, I didn't understand your question, can you rephrase it?"
+lacks "prose-only reply: prose not shown as a model suggestion" "$out" "assist"
+
+printf '%s\n' 'Alternatively, you can use:' '**Option 1:**' '# replace the host' \
+  'dig +short example.com' 'FakeVM list vms' 'Unfortunately, that needs root.' \
+  'nslookup example.com' 'host example.com' > "$reply"
+out=$(hint short dns lookup 2>&1)
+has "prose, bold and comment lines dropped: first command kept" "$out" "dig +short <HOST>"
+lacks "prose line dropped" "$out" "Alternatively"
+lacks "bold line dropped" "$out" "Option 1"
+lacks "comment line dropped" "$out" "replace the host"
+has "installed command starting with a capital kept" "$out" "FakeVM list vms"
+has "prose does not use up guess slots (third command kept)" "$out" "nslookup example.com"
+lacks "still at most 3 guesses" "$out" "host example.com"
+err=$(HINT_DEBUG=1 hint short dns lookup 2>&1 >/dev/null)
+has "HINT_DEBUG: dropped prose shown" "$err" "hint: not a command, dropped: Alternatively, you can use:"
 
 printf '%s\n' '```' '```' > "$reply"
 out=$(hint zzqq frobnicate 2>&1)
