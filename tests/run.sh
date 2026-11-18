@@ -28,7 +28,7 @@ export PATH="$tmp/bin:$PATH"
 export HINTDB_DB="$tmp/hint.db" HINTDB_MANDB="$tmp/man.db"
 export HINTDB_SOURCES="$tmp/sources" HISTFILE="$fix/history"
 export HINTDB_APROPOS="cat $fix/apropos.txt"
-unset HINTDB_IGNORE HINTDB_NO_MAN HINTDB_MATCH_MIN HINT_DEBUG HINT_MODEL
+unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL
 
 pass=0 fail=0
 
@@ -58,8 +58,8 @@ done
 for f in "$root"/eval/*.py; do
   python3 -m py_compile "$f" && ok "$(basename "$f") compiles" || bad "$(basename "$f") compiles"
 done
-if grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/* >/dev/null; then
-  bad "code is ASCII only" "$(grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/*)"
+if grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/*.* >/dev/null; then
+  bad "code is ASCII only" "$(grep -nP '[^\x00-\x7F]' "$root/hint" "$root/hintdb" "$here"/*.sh "$here"/*.py "$root"/eval/*.*)"
 else
   ok "code is ASCII only"
 fi
@@ -161,51 +161,100 @@ out=$(hintdb query DNS lookup)
 line "man NAME line finds dig for 'DNS lookup'" "$out" 1 "dig  # DNS lookup utility  [man dig(1)]"
 has "man hit pulls in the user's own dig rows" "$out" "dig +short <HOST>  [x3"
 
-echo "== match"
-out=$(hintdb match "dig +short example.com" 2>&1)
-line "exact match prints the user's row" "$out" 1 "dig +short <HOST>"
-has "exact match status: history count and example" "$out" "# your history x3; e.g. dig +short web"
-lacks "exact match does not print the guess" "$out" "example.com"
+echo "== find"
+out=$(hintdb find -q "short dns lookup" "dig +short example.com" 2>&1)
+line "guess with the same shape as a row: the user's row" "$out" 1 "dig +short <HOST>"
+has "row status: history count and example" "$out" "# your history x3; e.g. dig +short web"
+lacks "guess with the same shape as a printed row is not printed" "$out" "example.com"
 
-out=$(hintdb match "dig example.com" 2>&1)
-line "guess without flags matches on all tokens" "$out" 1 "dig <HOST>"
+out=$(hintdb find -q "remove offending key" "rm ~/.ssh/known_hosts" 2>&1)
+line "history comment found by the question's words, wrong tool guessed" "$out" 1 \
+  "ssh-keygen -f '/home/user/.ssh/known_hosts' -R <HOST>"
+line "the user's row leads: the model's guess comes second" "$out" 3 "rm ~/.ssh/known_hosts"
+line "the model's guess second is labelled model suggestion" "$out" 4 "  # model suggestion"
 
-out=$(hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
-line "flags beat use count: tunnel row, not plain ssh x6" "$out" 1 \
-  "ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>"
-has "partial match also prints the guess, after the user's rows" "$out" "ssh -L 8080:localhost:80 user@remote_host"
-line "partial match: guess below the user's rows is just a model suggestion" "$out" 6 \
-  "  # model suggestion"
-has "case 2: see man, with section and summary" "$out" "# see man ssh(1): OpenSSH remote login client"
+out=$(hintdb find -q "tunnels to postgres" 2>&1)
+line "words match by stem (tunnels -> tunnel), no guesses needed" "$out" 1 \
+  "ssh -N -L 5432:localhost:5432 db.example.org"
 
-out=$(hintdb match "nslookup example.com" 2>&1)
-line "case 2: first guess" "$out" 1 "nslookup example.com"
-line "case 2: first guess is the most likely" "$out" 2 "  # most likely (model suggestion)"
-line "case 2: see man after the suggestions" "$out" 3 \
-  "# see man nslookup(1): query Internet name servers interactively"
+out=$(hintdb find -q "post" 2>&1)
+lacks "words do not match by prefix (post -> postgres)" "$out" "5432"
 
-out=$(hintdb match "nslookup example.com" "nslookup -type=mx example.com" 2>&1)
-line "case 2: later guesses are alternatives" "$out" 4 "  # alternative (model suggestion)"
+out=$(hintdb find -q "nginx logs" 2>&1)
+lacks "values are not searched unless a path is mentioned" "$out" "tail -f"
+out=$(hintdb find -q "nginx log directory" 2>&1)
+line "values are searched when a path is mentioned" "$out" 1 "tail -f /var/log/<PATH>"
+
+out=$(hintdb find -q "look up mail exchanger records" "dig mx example.org" 2>&1)
+line "best row holds few of the question's words: the model's guess leads" "$out" 1 \
+  "dig mx example.org"
+line "a leading guess is the most likely" "$out" 2 "  # most likely (model suggestion)"
+has "the user's rows for the guessed tool follow" "$out" "dig +short <HOST>"
+has "see man for a suggested tool, with section and summary" "$out" \
+  "# see man dig(1): DNS lookup utility"
+
+out=$(hintdb find -q "query name servers" "nslookup example.com" "nslookup -type=mx example.com" 2>&1)
+line "no rows: first guess" "$out" 1 "nslookup example.com"
+line "no rows: first guess is the most likely" "$out" 2 "  # most likely (model suggestion)"
+line "no rows: later guesses are alternatives" "$out" 4 "  # alternative (model suggestion)"
 if [ "$(grep -c '^# see man nslookup' <<<"$out")" = 1 ]; then
-  ok "case 2: see man once per tool"
+  ok "see man once per tool"
 else
-  bad "case 2: see man once per tool" "$out"
+  bad "see man once per tool" "$out"
 fi
 
+out=$(hintdb find -q "forget a known host" "ssh-keygen -R example.org" 2>&1)
+if [ "$(grep -c '^ssh-keygen .*-R <HOST>\|^ssh-keygen -R web2' <<<"$out")" = 1 ]; then
+  ok "rows that differ only in values and flag order shown once"
+else
+  bad "rows that differ only in values and flag order shown once" "$out"
+fi
+has "several rows of the tool are shown" "$out" "ssh-keygen -l -f /home/user/.ssh/<PATH>"
+
+out=$(hintdb find -q "disk usage of directory contents" "du -sh /tmp/x/" 2>&1)
+if [ "$(grep -c '^du -sh /srv/current/\?$' <<<"$out")" = 2 ]; then
+  ok "trailing / is not collapsed as a value"
+else
+  bad "trailing / is not collapsed as a value" "$out"
+fi
+first=$(grep -m1 '^du ' <<<"$out")
+if [ "$first" = "du -sh /srv/current/" ]; then ok "equal scores: the row whose trailing / matches the guess first"
+else bad "equal scores: the row whose trailing / matches the guess first" "$out"; fi
+out=$(hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" 2>&1)
+first=$(grep -m1 '^du ' <<<"$out")
+if [ "$first" = "du -sh /srv/current" ]; then ok "equal scores: the row without trailing / first for a guess without"
+else bad "equal scores: the row without trailing / first for a guess without" "$out"; fi
+
+out=$(hintdb find -q "dns" "dig +short a.example.org" "dig +short b.example.org" 2>&1)
+if [ "$(grep -c '^dig +short <HOST>$' <<<"$out")" = 1 ]; then
+  ok "same row for two guesses printed once"
+else
+  bad "same row for two guesses printed once" "$out"
+fi
+
+out=$(hintdb find -q "zzqq frobnicate" 2>&1)
+if [ -z "$out" ]; then ok "nothing found, no guesses: prints nothing"; else bad "nothing found, no guesses: prints nothing" "$out"; fi
+
+err=$(hintdb find --debug -q "ssh tunnel" "ssh -L 8080:localhost:80 user@remote_host" 2>&1 >/dev/null)
+has "--debug shows the words" "$err" "words: ['ssh', 'tunnel']"
+has "--debug shows the guessed tools" "$err" "guessed tools: ['ssh']"
+has "--debug shows the score table" "$err" "score   bm25 tool flags gwords  uses   command"
+has "--debug shows who leads" "$err" "of the question's words ->"
+
 echo "== installed only"
-out=$(hintdb match "foozz --bar" 2>&1)
+out=$(hintdb find -q "zzqq" "foozz --bar" 2>&1)
 line "uninstalled guess, nothing else: says so" "$out" 1 \
   "# no installed command found; the model suggested the following:"
 line "uninstalled guess shown as a comment only" "$out" 2 "#   foozz --bar"
 
-out=$(hintdb match "foozz --bar" "dig +short example.com" 2>&1)
+out=$(hintdb find -q "short dns" "foozz --bar" "dig +short example.com" 2>&1)
 line "uninstalled guess omitted when an installed command is shown" "$out" 1 "dig +short <HOST>"
 lacks "uninstalled guess not mentioned then" "$out" "foozz"
 
-out=$(hintdb match "fakesched -Nel" 2>&1)
-line "user's rows for an uninstalled tool: named source" "$out" 1 \
+out=$(hintdb find -q "list jobs" "fakesched -Nel" 2>&1)
+has "user's rows for an uninstalled tool: named source" "$out" \
   "# found in cluster.md, but fakesched is not installed here:"
-line "user's rows for an uninstalled tool: as comments" "$out" 2 "#   fakesched -Nel"
+has "user's rows for an uninstalled tool: as comments" "$out" "#   fakesched -Nel"
 if grep -q '^fakesched' <<<"$out"; then
   bad "uninstalled tool never printed as a command" "$out"
 else
@@ -213,47 +262,11 @@ else
 fi
 lacks "uninstalled guess with rows not repeated in the model block" "$out" "no installed command found"
 
-out=$(hintdb match "history 10" 2>&1)
+out=$(hintdb find -q "show history" "history 10" 2>&1)
 line "shell builtins count as installed (history)" "$out" 1 "history 10"
-out=$(hintdb match "fc -ln -10" 2>&1)
+out=$(hintdb find -q "history without numbers" "fc -ln -10" 2>&1)
 line "shell builtins count as installed (fc, user's row)" "$out" 1 "fc -ln -10"
 has "shell builtins count as installed (fc, user's row)" "$out" "# your history x1"
-
-out=$(hintdb match "dig +short a.example.org" "dig +short b.example.org" 2>&1)
-if [ "$(grep -c '^dig +short <HOST>$' <<<"$out")" = 1 ]; then
-  ok "same row for two guesses printed once"
-else
-  bad "same row for two guesses printed once" "$out"
-fi
-
-out=$(hintdb match "nslookup example.com" "dig +short example.com" 2>&1)
-line "user's row from a later guess comes before an earlier model suggestion" "$out" 1 \
-  "dig +short <HOST>"
-line "model suggestion follows the user's rows" "$out" 3 "nslookup example.com"
-
-out=$(hintdb match "du -sh /tmp/x/" 2>&1)
-line "a guess with trailing / prefers the row with trailing /" "$out" 1 "du -sh /srv/current/"
-
-out=$(hintdb match "ssh-keygen -f ~/.ssh/known_hosts" 2>&1)
-has "case 1: several matching rows of the tool are shown" "$out" "ssh-keygen -l -f /home/user/.ssh/<PATH>"
-if [ "$(grep -c '^ssh-keygen .*-R' <<<"$out")" = 1 ]; then
-  ok "case 1: host and flag-order variants of a row shown once"
-else
-  bad "case 1: host and flag-order variants of a row shown once" "$out"
-fi
-lacks "case 1: rows below HINTDB_MATCH_MIN not shown" "$out" "-C <STR>"
-line "case 1: model guess follows the user's rows" "$out" 5 "ssh-keygen -f ~/.ssh/known_hosts"
-
-out=$(HINTDB_MATCH_MIN=0.9 hintdb match "ssh -L 8080:localhost:80 user@remote_host" 2>&1)
-line "HINTDB_MATCH_MIN raises the bar" "$out" 1 "ssh -L 8080:localhost:80 user@remote_host"
-
-err=$(hintdb match --debug "ssh -L 8080:localhost:80 user@remote_host" 2>&1 >/dev/null)
-has "--debug shows the shape" "$err" "shape: ssh -L <N>:localhost:<N> <USER@HOST>"
-has "--debug shows the score table" "$err" "flags   all  uses   shape"
-has "--debug shows the decision" "$err" "-> partial match"
-
-out=$(printf '%s\n' "dig +short example.com" | hintdb match 2>&1)
-line "guesses read from stdin" "$out" 1 "dig +short <HOST>"
 
 echo "== hint (stub Ollama)"
 reply="$tmp/reply"
@@ -269,10 +282,11 @@ status "no arguments: usage, exit 2" 2 $?
 
 printf '%s\n' '```bash' '1. dig +short example.com' '' '$ ssh -L 8080:localhost:80 user@remote_host' \
   '- nslookup example.com' 'host example.com' '```' > "$reply"
-out=$(hint how do I look up dns 2>&1)
+out=$(hint short dns lookup 2>&1)
 status "messy reply: exit 0" 0 $?
-line "fences and numbering stripped" "$out" 1 "dig +short <HOST>"
-has "\$ prompt stripped" "$out" "ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>"
+lacks "fences stripped" "$out" '```'
+has "numbering stripped" "$out" "dig +short <HOST>"
+has "\$ prompt stripped" "$out" "ssh -L 8080:localhost:80 user@remote_host"
 has "bullet stripped" "$out" "nslookup example.com"
 lacks "at most 3 guesses used" "$out" "host example.com"
 
@@ -283,21 +297,39 @@ has "request: not streamed" "$(jq -r .stream <<<"$req")" "false"
 has "request: system, example exchange, then the query" \
   "$(jq -r '[.messages[].role] | join(",")' <<<"$req")" "system,user,assistant,user"
 has "request: last message is the query" \
-  "$(jq -r '.messages[-1].content' <<<"$req")" "how do I look up dns"
+  "$(jq -r '.messages[-1].content' <<<"$req")" "short dns lookup"
 
 printf '%s\n' 'dig +short example.com' > "$reply"
 err=$(HINT_DEBUG=1 hint dns lookup 2>&1 >/dev/null)
 has "HINT_DEBUG: model guesses" "$err" "hint: model guesses:"
-has "HINT_DEBUG: match scores" "$err" "flags   all  uses   shape"
+has "HINT_DEBUG: find scores" "$err" "score   bm25 tool flags gwords  uses   command"
 
 : > "$reply"
-out=$(hint dns lookup 2>&1)
-status "empty reply: exit 1" 1 $?
-has "empty reply: message" "$out" "model returned no commands"
+out=$(hint short dns lookup 2>&1)
+status "empty reply: the question's own words are still looked up (exit 0)" 0 $?
+has "empty reply: the user's row found by the question's words" "$out" "dig +short <HOST>"
+
+out=$(hint zzqq frobnicate 2>&1)
+status "empty reply, nothing found: exit 1" 1 $?
+has "empty reply, nothing found: asks to rephrase" "$out" \
+  "Sorry, I didn't understand your question, can you rephrase it?"
+
+printf '%s\n' '```' '```' > "$reply"
+out=$(hint zzqq frobnicate 2>&1)
+has "nothing left after cleaning: asks to rephrase" "$out" \
+  "Sorry, I didn't understand your question, can you rephrase it?"
 
 out=$(OLLAMA_HOST=127.0.0.1:1 hint dns lookup 2>&1)
 status "Ollama unreachable: exit 1" 1 $?
-has "Ollama unreachable: message" "$out" "hint: no response from Ollama"
+has "Ollama unreachable: says it cannot connect" "$out" \
+  "hint: cannot connect to Ollama at http://127.0.0.1:1 (is it running?)"
+lacks "Ollama unreachable: no rephrase message" "$out" "rephrase"
+
+printf '%s\n' '!error model "nosuch" not found, try pulling it first' > "$reply"
+out=$(HINT_MODEL=nosuch hint dns lookup 2>&1)
+status "Ollama error: exit 1" 1 $?
+has "Ollama error: shows Ollama's message" "$out" \
+  "returned an error (model nosuch): model \"nosuch\" not found, try pulling it first"
 
 echo
 echo "$pass passed, $fail failed"

@@ -11,24 +11,30 @@ ssh -L 8080:localhost:80 user@remote_host
 # see man ssh(1): OpenSSH remote login client
 ```
 
-A local LLM guesses the command. `hint` then replaces the guess with the closest
-command you have actually used, in your usual form. Nothing is ever executed.
+A local LLM guesses the command. `hint` then looks up the commands you have
+actually used, by your question's words and the model's guess, and shows them in
+your usual form with the model's guess alongside. Nothing is ever executed.
 
 ## How it works
 
 1. **Guess.** `hint` asks an LLM (Ollama chat API, temperature 0) for 1-3
    commands that do what you asked.
-2. **Match.** `hintdb match` reduces each guess to a *shape* (values become
-   placeholders such as `<HOST>` and `<PATH>`). It then compares that shape with
-   your indexed commands for the same tool:
-   - score = overlap of option flags (`-x`, `--long`, `+opt`, values ignored);
-     ties are broken by overlap of all tokens, then by use count
-   - **match** (flag overlap >= 0.5): up to 5 of your commands in total, best
-     first; variants that differ only in values (hosts, flag order) show
-     once. The model's guess follows unless it has the same shape as one of
-     them.
-   - **no match**: the model's guess ("most likely" for the first, then
-     "alternative"; just "model suggestion" when your rows are shown above), with `# see man <tool>(<section>): <summary>` once per tool
+2. **Find.** `hintdb find` looks up your indexed commands for the question:
+   - **candidates:** every row that contains a word of the question (matched
+     by stem with SQLite FTS5's porter stemmer, so `tunnels` finds `tunnel`)
+     or is for a tool the model guessed. Paths and other values are searched
+     only when the question mentions a path (`/`, `~`, dir, folder, path).
+   - **score:** bm25 of the question's words (your history comments weigh
+     more), plus smaller parts for the guessed tool, the flags the row shares
+     with a guess, and the guesses' words; use count breaks ties.
+   - **your rows:** the best 5; variants that differ only in values (hosts,
+     flag order) show once.
+   - **who leads:** your best row comes first when it holds more than half of
+     the question's words; the model's first guess then comes second.
+     Otherwise the model's guess comes first ("most likely"), then your rows.
+     Further guesses follow, with `# see man <tool>(<section>): <summary>`
+     once per suggested tool. A guess with the same shape as one of your
+     printed rows is not repeated.
    - **not installed** (not on PATH and not a shell builtin): never printed as
      a command. Your rows for it are listed as `#` comments with the file
      they came from; the model's guesses are listed that way only when
@@ -126,7 +132,7 @@ ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 | `hintdb rebuild` | force a full rebuild |
 | `hintdb update` | rebuild only if something changed |
 | `hintdb stats` | entries per kind and man page count, for checking dedup |
-| `hintdb match [--debug] GUESS...` | closest own command per guessed command (used by `hint`) |
+| `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb query [-n N] WORDS...` | keyword search over the index (debugging; not used by `hint`) |
 
 Source kinds are detected from the file name. Use `--kind` to override, e.g. for
@@ -142,8 +148,7 @@ hintdb add --kind history ~/.bash_history.old
 |---|---|---|
 | `HINT_MODEL` | `qwen2.5-coder:3b` | Ollama model |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server |
-| `HINT_DEBUG` | unset | print model guesses and match scores to stderr |
-| `HINTDB_MATCH_MIN` | `0.5` | minimum flag overlap to count as a match |
+| `HINT_DEBUG` | unset | print model guesses and find scores to stderr |
 | `HINTDB_IGNORE` | empty | extra command words never to index (space-separated) |
 | `HINTDB_NO_MAN` | unset | disable the man page index |
 | `HINTDB_DB` | `~/.local/share/hintdb/hint.db` | index location |
@@ -172,40 +177,45 @@ To measure hint on your own queries with a real model, see
   different flags.
 - Long and short forms of the same option (`-r`, `--recursive`) aren't treated
   as equal.
-- Only one row is returned per guess, even when several of your commands score
-  equally.
+- When the model's first guess has the same shape as one of your rows, it is
+  not printed again, and the next guess (possibly another tool) is the one
+  that can lead.
 - Bash history without timestamps gives only rough recency (line order).
 
 ## Debugging a lookup
 
 ```bash
-HINT_DEBUG=1 hint how do I create an ssh tunnel
+HINT_DEBUG=1 hint how do I create an ssh tunnel to postgres
 ```
 
 ```
 hint: model guesses:
-ssh -L 8080:localhost:80 user@remote_host
-hintdb: guess: ssh -L 8080:localhost:80 user@remote_host
-hintdb:   shape: ssh -L <N>:localhost:<N> <USER@HOST>
-hintdb:   368 rows for tool 'ssh', top:
-hintdb:     flags   all  uses   shape
-hintdb:      0.50  0.60  x2     ssh -L <N>:localhost:<N> -i <PATH> <USER@HOST>
-hintdb:      0.50  0.33  x2     ssh -L <N>:<HOST>:<N> -i <PATH> <USER@HOST>
-hintdb:      0.00  0.33  x893   ssh <USER@HOST>
-hintdb:   -> partial match (0.50 >= 0.5), 1 distinct row(s); guess shown too
-ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>
-  # your history x2; e.g. ssh -L 11434:localhost:11434 -i ~/.ssh/my_key ubuntu@gpu-dev.example.com
-ssh -L 8080:localhost:80 user@remote_host
+ssh -L 5433:localhost:5432 user@postgres-server
+hintdb: words: ['create', 'ssh', 'tunnel', 'postgres']
+hintdb: guessed tools: ['ssh']  guess words: ['ssh', 'postgres']
+hintdb: 10 candidate rows, top:
+hintdb:    score   bm25 tool flags gwords  uses   command
+hintdb:    1.750   1.00  1.0  0.50   1.00  x1      ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres
+hintdb:    0.617   0.06  1.0  0.50   0.32  x2      ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
+hintdb:    0.519   0.09  1.0  0.00   0.32  x6      ssh user@<HOST>
+hintdb: best row holds 0.71 of the question's words -> user's row leads
+ssh -N -L 5432:localhost:5432 db.example.org
+  # your history x1: tunnel to postgres
+ssh -L 5433:localhost:5432 user@postgres-server
   # model suggestion
-# see man ssh(1): OpenSSH remote login client
+...
 ```
 
 How to read it:
 
 - **Wrong tool in the guesses:** a model or prompt problem. Try a larger model,
   e.g. `HINT_MODEL=qwen2.5-coder:7b`.
-- **Right tool, wrong row chosen:** a scoring problem; the table shows why.
-- **Useful rows just below 0.5:** adjust `HINTDB_MATCH_MIN`.
+- **Your command is missing from the table:** none of the question's words
+  are in it (or only in its paths and values, which are searched only when
+  the question mentions a path), and the model guessed another tool. A
+  `# comment` on the command in your history fixes that for next time.
+- **Your command is in the table but ranked low:** a scoring problem; the
+  columns show which part is missing.
 
 To see what a source contributes after cleaning and dedup:
 
@@ -226,12 +236,12 @@ Data flow from sources to the printed answer, traced with the example query
  FILES
  ============================================================================
   ~/.local/bin/hint          bash script: model call + output
-  ~/.local/bin/hintdb        python (stdlib + sqlite FTS5): index + match
+  ~/.local/bin/hintdb        python (stdlib + sqlite FTS5): index + find
   ~/.config/hintdb/sources   registered sources (kind<TAB>path)
   ~/.local/share/hintdb/     hint.db, man.db
 
 
- INGEST  (hintdb add/remove/rebuild, or automatically before match/query
+ INGEST  (hintdb add/remove/rebuild, or automatically before find/query
           when any source's mtime/size, the schema version or HINTDB_IGNORE
           changes; full rebuild into a temp file, then atomic replace)
  ============================================================================
@@ -262,20 +272,21 @@ Data flow from sources to the printed answer, traced with the example query
                                                              <USER@HOST>
           examples     2 real variants, each with its own note
           dnote        notes carried by >= half the uses
-          note         all notes (search only)
+          hnote        history comments (search only, weighs more)
+          nnote        text from notes files (search only)
           cmdword      ssh
           sources      files the row came from (for "found in <source>")
-          prog/args/data   weighted FTS columns (hintdb query only)
+          prog/args/data/variants   searched FTS columns
           |
           v
-        hint.db (FTS5, schema 6)
+        hint.db (FTS5, porter stemmer, schema 11)
 
   apropos . --> sections 1/8 NAME lines --> man.db
   (rebuilt when /var/cache/man index files change)
                 ssh: OpenSSH remote login client
 
 
- QUERY   $ HINT_DEBUG=1 hint how do I create an ssh tunnel
+ QUERY   $ hint how do I create an ssh tunnel to postgres
  ============================================================================
 
   hint
@@ -285,47 +296,48 @@ Data flow from sources to the printed answer, traced with the example query
    |                  system     1-3 commands, best first, commands only
    |                  user       show disk usage of a directory   (example)
    |                  assistant  du -sh /var/log / ncdu /var/log  (example)
-   |                  user       how do I create an ssh tunnel
+   |                  user       how do I create an ssh tunnel to postgres
+   |                cannot connect / timeout / Ollama error -> say which, exit 1
    v
   model reply  ->  cleanup (fences, "$ ", numbering, blanks; max 3 lines)
-   |
-   |   ssh -L 8080:localhost:80 user@remote_host
+   |               (nothing left: the lookup goes on with the question alone)
+   |   ssh -L 5433:localhost:5432 user@postgres-server
    v
-  (2) MATCH     hintdb match [--debug] -- <guess>...
+  (2) FIND      hintdb find [--debug] -q <question> -- <guess>...
    |
-   |  per guess:
-   |    tool   = ssh
-   |    shape  = ssh -L <N>:localhost:<N> <USER@HOST>
-   |    rows   = hint.db WHERE cmdword = 'ssh'          (368 rows)
-   |    score each:  flags  overlap of -x/--long/+opt tokens (values ignored;
-   |                        all tokens if the guess has no flags)
-   |                 all    overlap of all argument tokens (tie-breaker)
-   |                 uses   count (last tie-breaker)
+   |    words       create ssh tunnel postgres     (stopwords dropped)
+   |    tools       ssh                            (from the guesses)
+   |    candidates  rows with a question word (porter stem; values only if a
+   |                path is mentioned) OR for a guessed tool
+   |    score       1.0  x bm25 of the question's words / best bm25
+   |                       (history comment column x1.5)
+   |              + 0.3  x guessed tool (1.0 first guess, 0.7 later)
+   |              + 0.3  x flag overlap with a guess for the same tool
+   |              + 0.3  x share of the guesses' words found (rarer count more)
+   |              + 0.02 x ln(uses)
    |
-   |      flags   all  uses   shape
-   |       0.50  0.60  x2     ssh -L <N>:localhost:<N> -i <PATH> <USER@HOST>
-   |       0.50  0.33  x2     ssh -L <N>:<HOST>:<N> -i <PATH> <USER@HOST>
-   |       0.50  0.33  x2     ssh -L <HOST>:<N>:localhost:<N> -i <PATH> <USER@HOST>
-   |       0.50  0.33  x1     ssh -L <HOST>:localhost:<N> -i <PATH> <USER@HOST>
-   |       0.00  0.33  x893   ssh <USER@HOST>
+   |      score   bm25 tool flags gwords  uses   command
+   |      1.750   1.00  1.0  0.50   1.00  x1     ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres
+   |      0.617   0.06  1.0  0.50   0.32  x2     ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
+   |      0.519   0.09  1.0  0.00   0.32  x6     ssh user@<HOST>
    |
-   |    tool not installed (not on PATH, not a builtin)?
-   |                          -> your rows as "# found in <source>" comments;
-   |                             guesses as comments only if nothing else
-   |    best flags >= HINTDB_MATCH_MIN (0.5)?
-   |      exact (same shape)  -> your rows only (up to 5)
-   |      partial             -> your rows, then the guess     <- this case
-   |      no match            -> the guess, with man summary
+   |    your rows   best 5 installed; same tool + flags + words shown once
+   |    who leads   best row holds > half the question's words (by rarity)?
+   |                  yes -> best row, model's guess, other rows   <- 0.71 here
+   |                  no  -> model's guess ("most likely"), your rows
    v
-  (3) OUTPUT    two lines per result, nothing executed; your rows from all
-                guesses first, then the model suggestions (each in guess order:
-                "most likely", then "alternative"), then "see man <tool>(<sec>)"
-                once per suggested tool, then any "not installed" comments
+  (3) OUTPUT    two lines per result, nothing executed; then further guesses,
+                "see man <tool>(<sec>)" once per suggested tool, and any
+                "not installed" comments. Nothing printed at all ->
+                "Sorry, I didn't understand your question, can you rephrase it?"
 
-  ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>
-    # your history x2; e.g. ssh -L 11434:localhost:11434 -i ~/.ssh/my_key ubuntu@gpu-dev.example.com
-  ssh -L 8080:localhost:80 user@remote_host
+  ssh -N -L 5432:localhost:5432 db.example.org
+    # your history x1: tunnel to postgres
+  ssh -L 5433:localhost:5432 user@postgres-server
     # model suggestion
+  ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
+    # your history x2; e.g. ssh -L 8080:localhost:80 -i ~/.ssh/key user@gpu2.example.org
+  ...
   # see man ssh(1): OpenSSH remote login client
 
 

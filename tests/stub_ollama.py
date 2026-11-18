@@ -6,7 +6,9 @@
 Binds to a free port on 127.0.0.1 and writes the port number to PORT_FILE.
 Each request body is saved to REQUEST_FILE (the last one wins). The reply
 content is read from the file named by STUB_REPLY_FILE at request time, so a
-test can change it between calls without restarting the server.
+test can change it between calls without restarting the server. A reply file
+starting with "!error " makes the stub answer 404 with that error message, as
+Ollama does for an unknown model.
 """
 import http.server
 import json
@@ -28,6 +30,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         with open(os.environ["STUB_REPLY_FILE"]) as f:
             content = f.read()
+        if content.startswith("!error "):
+            body = json.dumps({"error": content[7:].strip()}).encode()
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         body = json.dumps({"message": {"role": "assistant", "content": content},
                            "done": True}).encode()
         self.send_response(200)

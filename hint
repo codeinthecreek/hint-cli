@@ -4,15 +4,15 @@
 #   hint how do I create an ssh tunnel
 #
 # 1. An LLM (Ollama chat API) guesses 1-3 commands for the request.
-# 2. hintdb match replaces each guess with the closest command from the
-#    user's own history/notes (same tool, token overlap), or keeps the guess
-#    marked as a model suggestion.
+# 2. hintdb find looks up the user's own history/notes rows for the request,
+#    using the request's words and the guesses' tools, flags and words, and
+#    prints them with the guesses as model suggestions.
 # Nothing is executed.
 #
 # Env:
 #   HINT_MODEL   Ollama model           (default qwen2.5-coder:3b)
 #   OLLAMA_HOST  Ollama server URL      (default http://localhost:11434)
-#   HINT_DEBUG   set to print the raw model guesses and match scores to stderr
+#   HINT_DEBUG   set to print the raw model guesses and find scores to stderr
 # Requires: curl, jq, hintdb.
 #
 # Note: a script can't flush the calling shell's history. For commands from
@@ -48,13 +48,21 @@ body=$(jq -n --arg model "$model" --arg system "$system" --arg query "$query" '{
   ]
 }')
 
-resp=$(curl -sS --fail-with-body --max-time 60 \
+# A connection problem is a setup problem: say which, and stop.
+resp=$(curl -s --fail-with-body --max-time 60 \
          -H 'Content-Type: application/json' \
-         -d "$body" "$host/api/chat") || {
-  echo "hint: no response from Ollama at $host (model $model)" >&2
-  [ -n "$resp" ] && echo "$resp" >&2
+         -d "$body" "$host/api/chat")
+rc=$?
+if [ $rc -ne 0 ]; then
+  case $rc in
+    6|7) echo "hint: cannot connect to Ollama at $host (is it running?)" >&2 ;;
+    28)  echo "hint: Ollama at $host did not answer within 60 s (model $model)" >&2 ;;
+    22)  err=$(jq -r '.error // empty' <<<"$resp" 2>/dev/null)
+         echo "hint: Ollama at $host returned an error (model $model): ${err:-$resp}" >&2 ;;
+    *)   echo "hint: no response from Ollama at $host (model $model; curl exit $rc)" >&2 ;;
+  esac
   exit 1
-}
+fi
 
 raw=$(jq -r '.message.content // empty' <<<"$resp")
 [ -n "${HINT_DEBUG:-}" ] && printf 'hint: model guesses:\n%s\n' "$raw" >&2
@@ -71,8 +79,17 @@ mapfile -t guesses < <(
   head -n 3
 )
 
-[ ${#guesses[@]} -gt 0 ] || { echo "hint: model returned no commands" >&2; exit 1; }
+# No usable guesses: still look up the request's own words (a history
+# comment may answer it).
+if [ ${#guesses[@]} -eq 0 ] && [ -n "${HINT_DEBUG:-}" ]; then
+  echo "hint: model returned no commands" >&2
+fi
 
 dbg=()
 [ -n "${HINT_DEBUG:-}" ] && dbg=(--debug)
-hintdb match "${dbg[@]}" -- "${guesses[@]}"
+out=$(hintdb find "${dbg[@]}" --query="$query" -- "${guesses[@]}") || exit 1
+if [ -z "$out" ]; then
+  echo "Sorry, I didn't understand your question, can you rephrase it?" >&2
+  exit 1
+fi
+printf '%s\n' "$out"
