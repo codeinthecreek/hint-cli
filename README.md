@@ -28,7 +28,10 @@ your usual form with the model's guess alongside. Nothing is ever executed.
      more), plus smaller parts for the guessed tool, the flags the row shares
      with a guess, and the guesses' words; use count breaks ties.
    - **your rows:** the best 5; variants that differ only in values (hosts,
-     flag order) show once.
+     flag order) show once. Rows that match nothing but the tool's name
+     (plain `ssh <host>` for "ssh tunnel") show once per tool, and the list
+     gets shorter instead of filling up with them. A guessed `a-b` tool
+     (`docker-compose`) also counts as `a b` when that is how you type it.
    - **who leads:** your best row comes first when it holds more than half of
      the question's words; the model's first guess then comes second.
      Otherwise the model's guess comes first ("most likely"), then your rows.
@@ -193,18 +196,31 @@ hint: model guesses:
 ssh -L 5433:localhost:5432 user@postgres-server
 hintdb: words: ['create', 'ssh', 'tunnel', 'postgres']
 hintdb: guessed tools: ['ssh']  guess words: ['ssh', 'postgres']
-hintdb: 10 candidate rows, top:
+hintdb: 12 candidate rows, top:
 hintdb:    score   bm25 tool flags gwords  uses   command
 hintdb:    1.750   1.00  1.0  0.50   1.00  x1      ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres
-hintdb:    0.617   0.06  1.0  0.50   0.32  x2      ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
-hintdb:    0.519   0.09  1.0  0.00   0.32  x6      ssh user@<HOST>
+hintdb:    0.600   0.04  1.0  0.50   0.30  x2      ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
+hintdb:    0.508   0.10  1.0  0.00   0.30  x2      ssh buildhost
+hintdb:    0.508   0.10  1.0  0.00   0.30  x2      ssh webhost
+hintdb:    0.499   0.46  0.0  0.00   0.00  x6      mkdir <PATH>
+hintdb:    0.496   0.07  1.0  0.00   0.30  x6      ssh user@<HOST>
+...
 hintdb: best row holds 0.71 of the question's words -> user's row leads
 ssh -N -L 5432:localhost:5432 db.example.org
   # your history x1: tunnel to postgres
 ssh -L 5433:localhost:5432 user@postgres-server
   # model suggestion
-...
+ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
+  # your history x2; e.g. ssh -L 8080:localhost:80 -i ~/.ssh/key user@gpu2.example.org
+ssh buildhost
+  # your history x2
+mkdir <PATH>
+  # your history x6; e.g. mkdir /dev/video1394  # create firewire devices
+# see man ssh(1): OpenSSH remote login client
 ```
+
+`ssh webhost` and `ssh user@<HOST>` match nothing but the tool, like `ssh
+buildhost`, so only the best of them is shown and the list ends at 4 rows.
 
 How to read it:
 
@@ -318,10 +334,13 @@ Data flow from sources to the printed answer, traced with the example query
    |
    |      score   bm25 tool flags gwords  uses   command
    |      1.750   1.00  1.0  0.50   1.00  x1     ssh -N -L 5432:localhost:5432 db.example.org  # tunnel to postgres
-   |      0.617   0.06  1.0  0.50   0.32  x2     ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
-   |      0.519   0.09  1.0  0.00   0.32  x6     ssh user@<HOST>
+   |      0.600   0.04  1.0  0.50   0.30  x2     ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
+   |      0.508   0.10  1.0  0.00   0.30  x2     ssh buildhost
+   |      0.508   0.10  1.0  0.00   0.30  x2     ssh webhost       (tool only: skipped)
    |
-   |    your rows   best 5 installed; same tool + flags + words shown once
+   |    your rows   best 5 installed; same tool + flags + words shown once;
+   |                rows matching only the tool shown once per tool, and
+   |                their places not refilled
    |    who leads   best row holds > half the question's words (by rarity)?
    |                  yes -> best row, model's guess, other rows   <- 0.71 here
    |                  no  -> model's guess ("most likely"), your rows
@@ -337,6 +356,8 @@ Data flow from sources to the printed answer, traced with the example query
     # model suggestion
   ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>
     # your history x2; e.g. ssh -L 8080:localhost:80 -i ~/.ssh/key user@gpu2.example.org
+  ssh buildhost
+    # your history x2
   ...
   # see man ssh(1): OpenSSH remote login client
 

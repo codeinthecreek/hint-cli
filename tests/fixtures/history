@@ -54,3 +54,11 @@ rsync -e "ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes" --archive --delete
 rsync -e "ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes" --archive --delete u@build2.example.org:/srv/data/ /home/user/backup/build2/
 du -sh /srv/current/
 du -sh /srv/current
+ssh buildhost
+ssh buildhost
+ssh webhost
+ssh webhost
+fakedock compose up -d
+fakedock compose up -d
+fakedock compose down
+fakedock ps

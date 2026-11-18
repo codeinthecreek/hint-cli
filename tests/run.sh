@@ -22,6 +22,10 @@ trap cleanup EXIT
 mkdir -p "$tmp/bin"
 ln -s "$root/hint" "$tmp/bin/hint"
 ln -s "$root/hintdb" "$tmp/bin/hintdb"
+# Stub tools the fixtures use, so they count as installed here.
+for t in fakedock fakedock-compose; do
+  printf '#!/bin/sh\n' > "$tmp/bin/$t"; chmod +x "$tmp/bin/$t"
+done
 export PATH="$tmp/bin:$PATH"
 
 # Isolated index and sources.
@@ -240,6 +244,20 @@ has "--debug shows the words" "$err" "words: ['ssh', 'tunnel']"
 has "--debug shows the guessed tools" "$err" "guessed tools: ['ssh']"
 has "--debug shows the score table" "$err" "score   bm25 tool flags gwords  uses   command"
 has "--debug shows who leads" "$err" "of the question's words ->"
+
+out=$(hintdb find -q "create an ssh tunnel to postgres" "ssh -L 5433:localhost:5432 user@postgres-server" 2>&1)
+n=$(grep -cE '^ssh (user@<HOST>|buildhost|webhost)$' <<<"$out")
+if [ "$n" = 1 ]; then ok "tool-only rows (nothing but the tool matches) shown once"
+else bad "tool-only rows (nothing but the tool matches) shown once" "$out"; fi
+has "rows with a shared flag are not tool-only" "$out" "ssh -L 8080:localhost:80 -i ~/.ssh/key user@<HOST>"
+n=$(grep -c '^ssh' <<<"$out")
+if [ "$n" -le 5 ]; then ok "a skipped tool-only row is not replaced by another row"
+else bad "a skipped tool-only row is not replaced by another row" "$out"; fi
+
+out=$(hintdb find -q "stop the containers" "fakedock-compose down" 2>&1)
+line "guessed a-b tool read as the user's 'a b' form: their row found" "$out" 3 "fakedock compose down"
+err=$(hintdb find --debug -q "stop the containers" "fakedock-compose down" 2>&1 >/dev/null)
+has "--debug shows the a-b reading" "$err" "guessed tool fakedock-compose also read as 'fakedock compose'"
 
 echo "== installed only"
 out=$(hintdb find -q "zzqq" "foozz --bar" 2>&1)

@@ -931,6 +931,24 @@ def find(text, guesses, debug=False):
     else:
         con = sqlite3.connect(DB)
     try:
+        # Tool credit: 1.0 for the first guess's tool, 0.7 for later ones.
+        tool_w = {t: (1.0 if i == 0 else 0.7) for i, t in enumerate(tools)}
+        # A guessed tool `a-b` is also read as `a b` when the user's rows use
+        # that form (docker-compose -> docker compose). Decided by the user's
+        # rows, not a list of tools; it changes scoring only, not what is printed.
+        for g in guesses:
+            t = tool_of(g)
+            if "-" not in t:
+                continue
+            a, b = t.split("-", 1)
+            if not con.execute("SELECT 1 FROM entries WHERE cmdword = ? AND "
+                               "(args = ? OR args LIKE ?) LIMIT 1", (a, b, b + " %")).fetchone():
+                continue
+            tool_w.setdefault(a, tool_w[t])
+            gshapes.append((a, shape(norm(g).replace(t, a + " " + b, 1))))
+            if b not in gwords and b not in GENERIC and b not in STOP and len(b) > 2:
+                gwords.append(b)
+            dbg(f"guessed tool {t} also read as '{a} {b}' (the user's form)")
         nrows = con.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         idf, found = {}, {}
         for t in terms + gwords:
@@ -952,7 +970,7 @@ def find(text, guesses, debug=False):
 
         # Candidates: a question word OR a guessed tool.
         cand = set().union(*(found[t] for t in terms)) if terms else set()
-        for t in tools:
+        for t in tool_w:
             cand |= {r for (r,) in con.execute(
                 "SELECT rowid FROM entries WHERE cmdword = ?", (t,))}
         gtot = sum(idf[w] for w in gwords) or 1
@@ -961,7 +979,7 @@ def find(text, guesses, debug=False):
             display, examples, dnote, shp, count, kind, sources, cmdword = con.execute(
                 "SELECT display, examples, dnote, shape, count, kind, sources, cmdword "
                 "FROM entries WHERE rowid = ?", (rid,)).fetchone()
-            tb = (1.0 if cmdword == tools[0] else 0.7) if cmdword in tools else 0.0
+            tb = tool_w.get(cmdword, 0.0)
             ov = [overlap(gs, shp) for t, gs in gshapes if t == cmdword]
             fl = max([o[0] for o in ov] or [0.0])
             alltok = max([o[1] for o in ov] or [0.0])   # tie-breaker (trailing / etc.)
@@ -985,9 +1003,13 @@ def find(text, guesses, debug=False):
         # The user's rows: up to MAX_ROWS installed ones; rows with the same
         # tool, flags and literal words differ only in values and show once.
         # Uninstalled rows ranked above the last printed row become comments.
+        # A tool-only row (no question word but its own tool name, no flag
+        # shared with a guess) is shown at most once per tool, and its place is
+        # not refilled: when the evidence runs out the list gets shorter.
         mine, shapes, keys, missing = [], set(), set(), {}
+        tool_only, skipped = set(), 0
         for x in scored:
-            if len(mine) >= MAX_ROWS:
+            if len(mine) + skipped >= MAX_ROWS:
                 break
             shp, cmdword = x[10], x[13]
             key = show_key(cmdword, shp)
@@ -1000,6 +1022,11 @@ def find(text, guesses, debug=False):
                     m["rows"].append(x[7])
                     m["sources"].update(json.loads(x[12] or "[]"))
                 continue
+            if x[3] == 0 and not any(x[6] in found[t] for t in terms if t != cmdword):
+                if cmdword in tool_only:
+                    skipped += 1
+                    continue
+                tool_only.add(cmdword)
             mine.append(x)
             shapes.add(shp)
 
