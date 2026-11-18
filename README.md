@@ -28,7 +28,10 @@ your usual form with the model's guess alongside. Nothing is ever executed.
      more), plus smaller parts for the guessed tool, the flags the row shares
      with a guess, and the guesses' words; use count breaks ties.
    - **your rows:** the best 5; variants that differ only in values (hosts,
-     flag order) show once.
+     flag order) show once. Rows that match nothing but the tool's name
+     (plain `ssh <host>` for "ssh tunnel") show once per tool, and the list
+     gets shorter instead of filling up with them. A guessed `a-b` tool
+     (`docker-compose`) also counts as `a b` when that is how you type it.
    - **who leads:** your best row comes first when it holds more than half of
      the question's words; the model's first guess then comes second.
      Otherwise the model's guess comes first ("most likely"), then your rows.

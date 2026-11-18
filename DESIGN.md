@@ -67,6 +67,13 @@ notes, in the form the user actually uses. Nothing is ever executed.
    4. **Candidates.** Every row that contains a query word OR is for a guessed
       tool. (Requiring both was tried 2026-11-16: it drops the rows where the
       model guessed the wrong tool, e.g. `setxkbmap` for "disable caps lock".)
+      A guessed tool written `a-b` also counts as `a b` when the user's rows
+      use that form: the model often writes `docker-compose up -d` where the
+      user types `docker compose up -d`. The user's rows decide, not a list
+      of tools (no `ssh keygen` rows, so `ssh-keygen` stays as it is). It
+      changes scoring only; the guess is printed as written. Added
+      2026-11-18: fixed "stop docker compose" (nothing useful -> exact first)
+      with no other change; on the current index also "start docker compose".
    5. **Score**, starting values chosen on the eval set (65 queries), so
       fitted to it:
 
@@ -121,9 +128,20 @@ notes, in the form the user actually uses. Nothing is ever executed.
       `du -sh dir` both show). Rows with equal scores are ordered by how
       many of their tokens they share with a guess for the same tool, so the
       row whose trailing `/` matches the guess comes first.
-      This only hides rows for that lookup; the index keeps them all. There
-      is no minimum score yet: weak rows can fill the list; one is added only
-      if that gets in the way in real use.
+      This only hides rows for that lookup; the index keeps them all.
+
+      **Tool-only rows once.** A row whose only link to the question is its
+      tool (no question word other than the tool's name, no flag shared with
+      a guess) is shown at most once per tool, the best-scoring one, and the
+      places of the others are not refilled: when the evidence runs out the
+      list gets shorter. Without this, a common tool fills the list with
+      e.g. plain `ssh <host>` logins under "how do I create an ssh tunnel to
+      postgres". Added 2026-11-18: noise (below) benchmark 291 -> 277,
+      hold-out 231 -> 220, questions 52 -> 42 (lines per query 6.0 -> 5.7,
+      5.8 -> 5.5, 6.0 -> 5.2), with exact first, useful first, position and
+      not shown unchanged on every query. (Culling them while refilling the
+      list, tried 2026-11-17, changed nothing: other rows took their place.)
+      There is no minimum score: other weak rows can still fill the list.
    2. **Model suggestions** (case 2: "I don't know the command"): guesses
       whose shape is not one of the printed rows.
       When none of the user's rows are shown, the first is labelled "most
@@ -218,6 +236,12 @@ printed lines, not only the first:
 - **not shown:** no useful line printed at all.
 - **junk:** lines that are not useful above the first useful one (all
   printed lines when none is useful).
+- **noise:** lines that are not useful among the first 6 printed (added
+  2026-11-18). Junk misses lines below the first useful one, which is where
+  filler such as repeated rows of the same tool shows up.
+
+Changes are compared query by query (which queries win, which lose), not
+only by totals: on sets this small a difference of a few is noise.
 
 Eval sets (outside the repo, real history): the benchmark (77 queries), the
 hold-out (79 of the user's history comments, each hidden while tested) and
@@ -225,9 +249,20 @@ the user's questions phrased as they would really ask them (12). Tuning
 stops where changes only trade a few hits between sets: real use decides
 the rest.
 
-Results with today's design (porter + bm25), exact first / useful first /
-not shown / junk: benchmark 32 / 55 / 15 / 99, hold-out 20 / 48 / 18 / 124,
-questions 7 / 7 / 1 / 14.
+Results with today's design (2026-11-18, on the 2026-11-17 index copy),
+exact first / useful first / not shown / junk / noise: benchmark
+34 / 56 / 14 / 94 / 276, hold-out 19 / 48 / 18 / 117 / 220, questions
+7 / 7 / 1 / 14 / 42. Which tools are installed changes these: rows of a
+tool installed later show up (`psql`, installed 2026-11-18, moved the
+benchmark to 34 / 55 / 13 and questions to 6 / 6 / 1).
+
+Where the misses are (2026-11-18, benchmark, no useful line printed, 15):
+the expected command is not in the index 3; it is not a candidate (in all
+but one case the model guessed the wrong tool and the row lacks the
+question's words) 4; it is a candidate ranked too low 7 (`docker`, `git`,
+`kubectl` subcommands among many rows of the tool; a neighbouring tool
+guessed); hidden by a row of the same shape 1. In the hold-out most misses
+(11 of 18) are label-like comments the model cannot interpret.
 
 ## Tried and rejected
 
@@ -271,6 +306,20 @@ hold-out 79, questions 12).
 - **Frecency** (use count x recency; history recency from the line's
   position, notes from the file's date): worse (benchmark useful first
   54 -> 45, exact 32 -> 21).
+
+2026-11-18, aimed at a common tool's rows scoring high just for being that
+tool (the tool counts in bm25, as the guessed tool and as the guess's only
+word):
+
+- **The tool word left out of bm25:** benchmark useful first 55 -> 54,
+  questions 7 -> 6 (losing "how do I use glow as a pager": the named tool
+  is often the word that matters).
+- **The tool's name not a guess word:** no change in useful first; hold-out
+  junk 124 -> 129.
+- **The tool counted once** (not in bm25 as the row's command, not a guess
+  word): useful first a tie (benchmark -2, hold-out +1), noise slightly
+  worse (benchmark 291 -> 300). Reordering cannot reduce noise while the
+  list is always refilled; "Tool-only rows once" does.
 
 ## Index
 
