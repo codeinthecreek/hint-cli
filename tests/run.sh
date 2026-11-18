@@ -15,7 +15,7 @@ fix="$here/fixtures"
 
 tmp=$(mktemp -d)
 stub_pid=
-cleanup() { [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null; rm -rf "$tmp"; }
+cleanup() { [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null; rm -rf -- "${tmp:?}"; }
 trap cleanup EXIT
 
 # Run the repo's hint/hintdb, not installed copies.
