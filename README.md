@@ -310,6 +310,7 @@ Data flow from sources to the printed answer, traced with the example query
    |                temperature 0, num_predict 120
    |                messages:
    |                  system     1-3 commands, best first, commands only
+   |                             (a different tool on each line if unsure)
    |                  user       show disk usage of a directory   (example)
    |                  assistant  du -sh /var/log / ncdu /var/log  (example)
    |                  user       how do I create an ssh tunnel to postgres

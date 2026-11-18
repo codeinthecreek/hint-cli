@@ -314,6 +314,8 @@ has "request: temperature 0" "$(jq -r .options.temperature <<<"$req")" "0"
 has "request: not streamed" "$(jq -r .stream <<<"$req")" "false"
 has "request: system, example exchange, then the query" \
   "$(jq -r '[.messages[].role] | join(",")' <<<"$req")" "system,user,assistant,user"
+has "request: system asks for different tools when unsure" \
+  "$(jq -r '.messages[0].content' <<<"$req")" "If you are not sure which tool fits, use a different tool on each line."
 has "request: last message is the query" \
   "$(jq -r '.messages[-1].content' <<<"$req")" "short dns lookup"
 
