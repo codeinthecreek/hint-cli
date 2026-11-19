@@ -23,7 +23,9 @@ set -o pipefail
 
 usage() { echo "usage: hint <what you want to do>" >&2; exit 2; }
 [ $# -gt 0 ] || usage
-case "$1" in -h|--help|help) usage ;; esac
+case "$1" in -h|--help) usage ;; esac
+# "help" alone is a command; "help me ..." is a question.
+[ $# -eq 1 ] && [ "$1" = help ] && usage
 
 for dep in curl jq hintdb; do
   command -v "$dep" >/dev/null || { echo "hint: $dep not found in PATH" >&2; exit 1; }

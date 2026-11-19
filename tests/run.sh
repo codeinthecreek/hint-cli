@@ -314,6 +314,20 @@ export OLLAMA_HOST="127.0.0.1:$(cat "$tmp/port")"
 
 hint >/dev/null 2>&1
 status "no arguments: usage, exit 2" 2 $?
+out=$(hint help 2>&1)
+status "help alone: exit 2" 2 $?
+has "help alone: usage" "$out" "usage: hint"
+out=$(hint -h dns lookup 2>&1)
+status "-h with more words: usage, exit 2" 2 $?
+out=$(hint --help 2>&1)
+status "--help: usage, exit 2" 2 $?
+
+printf '%s\n' 'du -sh /tmp/x' > "$reply"
+out=$(hint help me find large files 2>&1)
+status "help followed by words is a question: exit 0" 0 $?
+lacks "help followed by words: no usage" "$out" "usage: hint"
+has "help followed by words: whole line sent as the query" \
+  "$(jq -r '.messages[-1].content' <"$tmp/request")" "help me find large files"
 
 printf '%s\n' '```bash' '1. dig +short example.com' '' '$ ssh -L 8080:localhost:80 user@remote_host' \
   '- nslookup example.com' 'host example.com' '```' > "$reply"
