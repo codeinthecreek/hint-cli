@@ -145,6 +145,18 @@ an old history file:
 hintdb add --kind history ~/.bash_history.old
 ```
 
+### Query log
+
+Every lookup appends one JSON line to `~/.local/share/hintdb/queries.jsonl`:
+the time, your question, the model's guesses, the lines printed (exactly as
+shown, also when nothing was printed) and the source files of each of your
+rows that was printed. Like your shell history, it stays on your machine
+and contains commands from your history. To turn it off:
+
+```bash
+export HINTDB_LOG=/dev/null
+```
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -158,6 +170,7 @@ hintdb add --kind history ~/.bash_history.old
 | `HINTDB_MANDB` | next to `HINTDB_DB` | man index location |
 | `HINTDB_SOURCES` | `~/.config/hintdb/sources` | source list |
 | `HINTDB_APROPOS` | `apropos .` | command that lists man NAME lines (for testing) |
+| `HINTDB_LOG` | `~/.local/share/hintdb/queries.jsonl` | query log; `/dev/null` turns it off |
 
 ## Tests
 
@@ -166,7 +179,8 @@ tests/run.sh
 ```
 
 The suite uses synthetic fixtures in `tests/fixtures` and a stub Ollama
-server, so it needs no model and never touches your index or history.
+server, so it needs no model and never touches your index, history or
+query log.
 Requires python3 (with FTS5), curl and jq.
 
 To measure hint on your own queries with a real model, see
@@ -256,7 +270,7 @@ Data flow from sources to the printed answer, traced with the example query
   ~/.local/bin/hint          bash script: model call + output
   ~/.local/bin/hintdb        python (stdlib + sqlite FTS5): index + find
   ~/.config/hintdb/sources   registered sources (kind<TAB>path)
-  ~/.local/share/hintdb/     hint.db, man.db
+  ~/.local/share/hintdb/     hint.db, man.db, queries.jsonl (query log)
 
 
  INGEST  (hintdb add/remove/rebuild, or automatically before find/query
@@ -352,6 +366,8 @@ Data flow from sources to the printed answer, traced with the example query
                 "see man <tool>(<sec>)" once per suggested tool, and any
                 "not installed" comments. Nothing printed at all ->
                 "Sorry, I didn't understand your question, can you rephrase it?"
+                hintdb find then appends the lookup to the query log
+                (question, guesses, printed lines, each row's sources).
 
   ssh -N -L 5432:localhost:5432 db.example.org
     # your history x1: tunnel to postgres

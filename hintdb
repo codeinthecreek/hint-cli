@@ -17,6 +17,10 @@ temp file that atomically replaces the DB, because dedup is global across source
                                                      alone, with scores (debugging)
   hintdb stats                                       row counts, for checking dedup
 
+Query log: each `find` from the command line appends one JSON line (time,
+question, guesses, printed lines, each printed row's source files) to
+~/.local/share/hintdb/queries.jsonl, or HINTDB_LOG (/dev/null turns it off).
+
 Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
 separate man.db, rebuilt only when man-db's index changes; used for the summary
 on model-suggested tools and listed by `query`. Set HINTDB_NO_MAN=1 to disable.
@@ -40,6 +44,7 @@ XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
 XDG_CONF = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
+LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
 
 KINDS = ("history", "md", "text", "just")
 NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just"}
@@ -999,10 +1004,12 @@ def open_db():
     return sqlite3.connect(DB)
 
 
-def find(text, guesses, debug=False):
+def find(text, guesses, debug=False, rows=None):
     """The user's rows for the question `text`, scored by bm25 of its words
     plus the guesses' tools, flags and words; then the model's guesses. Two
-    lines per result: command, status. Returns [] when nothing was found."""
+    lines per result: command, status. Returns [] when nothing was found.
+    When `rows` is a list, each printed row of the user's is appended to it as
+    {"line": ..., "sources": [...]}, for the query log."""
     def dbg(msg):
         if debug:
             print("hintdb: " + msg, file=sys.stderr)
@@ -1030,7 +1037,7 @@ def find(text, guesses, debug=False):
         # shared with a guess) is shown at most once per tool, and its place is
         # not refilled: when the evidence runs out the list gets shorter.
         mine, shapes, keys, missing = [], set(), set(), {}
-        tool_only, skipped = set(), 0
+        tool_only, skipped, miss = set(), 0, []
         for x in scored:
             if len(mine) + skipped >= MAX_ROWS:
                 break
@@ -1044,6 +1051,7 @@ def find(text, guesses, debug=False):
                 if len(m["rows"]) < MAX_ROWS:
                     m["rows"].append(x[7])
                     m["sources"].update(json.loads(x[12] or "[]"))
+                    miss.append({"line": x[7], "sources": json.loads(x[12] or "[]")})
                 continue
             if x[3] == 0 and not any(x[6] in found[t] for t in terms if t != cmdword):
                 if cmdword in tool_only:
@@ -1052,6 +1060,9 @@ def find(text, guesses, debug=False):
                 tool_only.add(cmdword)
             mine.append(x)
             shapes.add(shp)
+        if rows is not None:   # in printed order: the user's rows, then uninstalled ones
+            rows.extend({"line": x[7], "sources": json.loads(x[12] or "[]")} for x in mine)
+            rows.extend(miss)
 
         theirs = [g for g in guesses if installed(tool_of(g)) and shape(g) not in shapes]
         # Who leads: the user's best row, when it holds more than half the
@@ -1106,6 +1117,28 @@ def find(text, guesses, debug=False):
         out.append("# no installed command found; the model suggested the following:")
         out.extend("#   " + g for g in guesses)
     return out
+
+# ---------------------------------------------------------------- query log
+
+
+def log_lookup(query, guesses, printed, rows):
+    """Append one JSON line per lookup to LOG. A single O_APPEND write, so
+    lookups from several terminals do not interleave. Failing to log only
+    warns: the answer has already been printed."""
+    rec = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "query": query,
+           "guesses": guesses, "printed": printed, "rows": rows}
+    data = (json.dumps(rec, ensure_ascii=True) + "\n").encode()
+    try:
+        d = os.path.dirname(LOG)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        print(f"hintdb: cannot write query log {LOG}: {e}", file=sys.stderr)
 
 # ---------------------------------------------------------------- cli
 
@@ -1177,8 +1210,12 @@ def main():
     elif args.op == "find":
         if not args.no_update:
             update()
-        for line in find(args.query, args.guesses, args.debug):
+        rows = []
+        out = find(args.query, args.guesses, args.debug, rows)
+        for line in out:
             print(line)
+        sys.stdout.flush()
+        log_lookup(args.query, args.guesses, out, rows)
     elif args.op == "query":
         if not args.no_update:
             update()

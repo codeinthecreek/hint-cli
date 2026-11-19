@@ -422,6 +422,25 @@ other words, so the limitation stays (README).
   rebuild is triggered automatically when a source file, the man-db index, the
   schema version or `HINTDB_IGNORE` changes.
 
+## Query log
+
+- **Purpose:** a record of real lookups, for looking up past answers
+  (`hint history`, `hint search`, planned), per-source usage and, later,
+  which printed line was used.
+- **Written by `hintdb find`** from the command line, after the answer is
+  printed, one JSON line per lookup: `time` (local, ISO), `query`,
+  `guesses` (as passed), `printed` (the lines exactly as shown) and `rows`
+  (each of the user's printed rows, then the "not installed" ones, as
+  `{"line", "sources"}`). Lookups that printed nothing are logged too. The
+  `find()` function itself does not log, so eval runs that call it do not
+  fill the log.
+- **On by default** at `~/.local/share/hintdb/queries.jsonl` (`HINTDB_LOG`;
+  `/dev/null` turns it off). Mode 0600. One `O_APPEND` write per lookup, so
+  several terminals do not interleave. A failed write only warns. No
+  rotation for now: one line per lookup stays small.
+- **Private:** like shell history it holds the user's commands; it stays
+  local and is never committed. Tests point it into their scratch directory.
+
 ## Known limitations
 
 Listed in README.md under "Limitations". Each is addressed only when a real

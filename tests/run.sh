@@ -31,6 +31,7 @@ export PATH="$tmp/bin:$PATH"
 # Isolated index and sources.
 export HINTDB_DB="$tmp/hint.db" HINTDB_MANDB="$tmp/man.db"
 export HINTDB_SOURCES="$tmp/sources" HISTFILE="$fix/history"
+export HINTDB_LOG="$tmp/queries.jsonl"
 export HINTDB_APROPOS="cat $fix/apropos.txt"
 unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL
 
@@ -303,6 +304,39 @@ out=$(hintdb find -q "history without numbers" "fc -ln -10" 2>&1)
 line "shell builtins count as installed (fc, user's row)" "$out" 1 "fc -ln -10"
 has "shell builtins count as installed (fc, user's row)" "$out" "# your history x1"
 
+echo "== query log"
+log="$HINTDB_LOG"
+: > "$log"
+out=$(hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" 2>/dev/null)
+has "log: one line per lookup" "$(wc -l <"$log")" "1"
+rec=$(tail -n1 "$log")
+has "log: the query" "$(jq -r .query <<<"$rec")" "disk usage of directory contents"
+has "log: the guesses as given" "$(jq -r '.guesses | join("|")' <<<"$rec")" "du -sh /tmp/x"
+if [ "$(jq -r '.printed[]' <<<"$rec")" = "$out" ]; then ok "log: printed lines exactly as shown"
+else bad "log: printed lines exactly as shown" "$rec"; fi
+has "log: time stamp" "$(jq -r .time <<<"$rec")" "T"
+has "log: each printed row with its source file" \
+  "$(jq -r '.rows[] | select(.line == "du -sh /srv/current") | .sources[]' <<<"$rec")" "$fix/history"
+lacks "log: model guesses have no row entry" "$(jq -r '.rows[].line' <<<"$rec")" "/tmp/x"
+
+hintdb find -q "zzqq frobnicate" >/dev/null 2>&1
+has "log: a lookup that printed nothing is logged too" "$(wc -l <"$log")" "2"
+has "log: nothing printed" "$(tail -n1 "$log" | jq -c .printed)" "[]"
+
+hintdb find -q "list jobs" "fakesched -Nel" >/dev/null 2>&1
+rec=$(tail -n1 "$log")
+has "log: uninstalled rows logged with their source" \
+  "$(jq -r '.rows[] | select(.line | startswith("fakesched")) | .sources[]' <<<"$rec")" "cluster.md"
+
+out=$(HINTDB_LOG="$tmp/newdir/sub/queries.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" 2>/dev/null)
+has "log: missing directory is created" "$(cat "$tmp/newdir/sub/queries.jsonl" 2>/dev/null | wc -l)" "1"
+mkdir -p "$tmp/ro"; chmod 500 "$tmp/ro"
+out=$(HINTDB_LOG="$tmp/ro/queries.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" 2>"$tmp/err")
+status "log: unwritable log does not fail the lookup" 0 $?
+has "log: unwritable log: answer still printed" "$out" "du -sh /srv/current"
+has "log: unwritable log: warning" "$(cat "$tmp/err")" "hintdb: cannot write query log"
+chmod 700 "$tmp/ro"
+
 echo "== hint (stub Ollama)"
 reply="$tmp/reply"
 export STUB_REPLY_FILE="$reply"
@@ -328,6 +362,8 @@ status "help followed by words is a question: exit 0" 0 $?
 lacks "help followed by words: no usage" "$out" "usage: hint"
 has "help followed by words: whole line sent as the query" \
   "$(jq -r '.messages[-1].content' <"$tmp/request")" "help me find large files"
+has "hint lookups are logged with the whole question" \
+  "$(tail -n1 "$HINTDB_LOG" | jq -r .query)" "help me find large files"
 
 printf '%s\n' '```bash' '1. dig +short example.com' '' '$ ssh -L 8080:localhost:80 user@remote_host' \
   '- nslookup example.com' 'host example.com' '```' > "$reply"
