@@ -2,8 +2,11 @@
 
 Natural-language command lookup for bash that answers from your own shell history and notes.
 
+```bash
+hint how do I create an ssh tunnel
 ```
-$ hint how do I create an ssh tunnel
+
+```text
 ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>
   # your history x2; e.g. ssh -L 11434:localhost:11434 -i ~/.ssh/my_key ubuntu@gpu-dev.example.com
 ssh -L 8080:localhost:80 user@remote_host
