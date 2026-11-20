@@ -528,6 +528,55 @@ for a in "ssh --show 2" "--show 2 -c" "--show 2 -n 3" "5 --show 2" "--show" "--s
   status "--show with other things or no number ($a): exit 2" 2 $?
 done
 
+# --delete: blank entries in a copy of the log; the others keep their numbers.
+cp "$flog" "$tmp/del.jsonl"
+D() { HINTDB_LOG="$tmp/del.jsonl" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }
+out=$(D history -d 2 2>&1)
+status "--delete NUM: exit 0" 0 $?
+line "--delete NUM: says what was deleted" "$out" 1 "deleted     2  2026-11-02 09:00  SSH tunnel to postgres"
+lacks "--delete NUM: gone from history" "$(D history -n 20 2>&1)" "SSH tunnel to postgres"
+has "--delete: other entries keep their numbers" "$(D history -n 20 2>&1)" "   12  2026-11-11 09:00  ssh with a key"
+has "--delete: the file keeps its line count" "$(wc -l <"$tmp/del.jsonl")" "13"
+has "--delete: --show of a deleted entry" "$(D history --show 2 2>&1)" "hintdb: no entry 2 in the query log"
+lacks "--delete: gone from search too" "$(D search 5432 2>&1)" "db.example.org"
+out=$(D history -d 2 2>&1)
+status "--delete of a deleted entry: exit 1" 1 $?
+has "--delete of a deleted entry: message" "$out" "hintdb: no entry 2 in the query log; nothing deleted"
+cp "$tmp/del.jsonl" "$tmp/del.before"
+out=$(D history --delete 5,99 2>&1)
+status "--delete with one missing NUM: exit 1" 1 $?
+has "--delete with one missing NUM: names it" "$out" "no entry 99 in the query log; nothing deleted"
+if cmp -s "$tmp/del.jsonl" "$tmp/del.before"; then ok "--delete with one missing NUM: nothing deleted"
+else bad "--delete with one missing NUM: nothing deleted"; fi
+out=$(D history --delete=1,5-7 2>&1)
+has "--delete list and range: all deleted" "$(grep -c '^deleted' <<<"$out")" "4"
+out=$(D -H --delete 3-5 2>&1)
+has "--delete range: only the entries in it (4 damaged, 5 gone)" "$out" "deleted     3"
+has "--delete range: one entry deleted" "$(grep -c '^deleted' <<<"$out")" "1"
+has "--delete: the rest" "$(D history -n 20 2>&1 | wc -l)" "6"
+for a in "history ssh -d 8" "history -d 8 -c" "history -d 8 -n 2" "history -d 8 -s 8" \
+         "history -d" "history -d x" "history -d 8,,9" "search -d 8" "-S -d 8"; do
+  D $a >/dev/null 2>&1
+  status "--delete with other things, no or bad NUM, or after search ($a): exit 2" 2 $?
+done
+has "--delete with nothing changed by the refused calls" "$(D history -n 20 2>&1 | wc -l)" "6"
+has "usage: --delete" "$(H help 2>&1)" "-d, --delete NUM[,NUM|NUM-NUM]..."
+HINTDB_LOG="$tmp/del.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
+has "a lookup after a delete is appended as the next line" \
+  "$(D history -n 1 2>&1)" "   14  "
+if command -v flock >/dev/null; then
+  flock "$tmp/del.jsonl" sleep 1 &
+  lock_pid=$!
+  sleep 0.2
+  t0=$(date +%s%N)
+  HINTDB_LOG="$tmp/del.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
+  t1=$(date +%s%N)
+  wait "$lock_pid"
+  if [ $(( (t1 - t0) / 1000000 )) -ge 500 ]; then ok "a lookup waits for the log lock instead of writing during a delete"
+  else bad "a lookup waits for the log lock instead of writing during a delete" "waited $(( (t1 - t0) / 1000000 )) ms"; fi
+  has "the lookup that waited is in the log" "$(D history -n 1 2>&1)" "   15  "
+fi
+
 # Flag forms.
 out=$(H -H 2>&1)
 has "-H alone: the last 10 lookups" "$(wc -l <<<"$out")" "10"

@@ -453,8 +453,18 @@ other words, so the limitation stays (README).
   - `--show N`: the full entry N, as printed then. `hint` accepts it after
     `history` and `-H` only: it shows a history entry, and after `search`
     it read as if it filtered the search.
+  - `--delete N[,N|N-M]...`: blanks the entries' lines, so other numbers do
+    not change (deleting 41 then 42 deletes the 42 that was shown). Every
+    single number must be an entry or nothing is deleted (a mistyped
+    number deletes nothing); a range deletes the entries in it. The file
+    is rewritten in place under an exclusive `flock`, and every append
+    takes the same lock, so a lookup in another terminal waits instead of
+    being lost. No backup copy: it prints what it deleted. History only in
+    `hint`, like `--show`. Agreed 2026-11-20 for lookups that went to the
+    model by mistake; bad index rows are better fixed in their source.
   An entry's number is its line in the file: stable while the log is only
-  appended to; damaged lines are skipped but keep their numbers. Agreed
+  appended to; damaged and deleted lines are skipped but keep their
+  numbers. Agreed
   2026-11-20: printing every answer in full made the list unusable within
   a day, so lists are one line per item and the full answer is asked for
   by number.
@@ -462,7 +472,7 @@ other words, so the limitation stays (README).
   positive number is the last N) and `hint search [OPTIONS] WORD` (printed
   commands) are commands when at most one plain word follows, with the
   options `-n/--last N`, `-c/--count` and, for history only,
-  `-s/--show NUM` (alone) anywhere. `history` alone lists the last 10
+  `-s/--show NUM` or `-d/--delete NUMS` (alone) anywhere. `history` alone lists the last 10
   lookups, like bash `history`; `search` alone prints the usage, since it
   needs a word. Two or more plain words make the line a question, and an
   unknown option with at most one plain word prints the usage. `help` is a command only

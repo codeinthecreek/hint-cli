@@ -42,6 +42,9 @@ OPTIONS, anywhere after history, search, -H or -S:
 After history or -H only, and on its own (no WORD, -n or -c):
   -s, --show NUM   the full answer of entry NUM (the number that
                    history and search print)
+  -d, --delete NUM[,NUM|NUM-NUM]...
+                   delete entries from the log; the others keep their
+                   numbers, and nothing is deleted if a NUM is not there
 With a second WORD, the line is a question for the model instead:
   hint history without duplicates
 An unknown option prints this help.
@@ -53,7 +56,7 @@ EOF
 # MODE: history (match the question) or search (match the printed lines).
 # FORM: "word" for `hint history WORD`, so a miss says how to ask instead.
 past() {
-  local mode=$1 form=$2 count= show= last= rc
+  local mode=$1 form=$2 count= show= del= last= rc
   local opts=() words=()
   shift 2
   [ "$mode" = search ] && opts=(--printed)
@@ -77,6 +80,15 @@ past() {
           show=${1#--show=}
         fi
         [[ $show =~ ^[1-9][0-9]*$ ]] || { echo "hint: --show needs an entry number" >&2; exit 2; } ;;
+      -d|--delete|--delete=*)
+        if [ "$1" = -d ] || [ "$1" = --delete ]; then
+          [ $# -ge 2 ] || usage
+          del=$2; shift
+        else
+          del=${1#--delete=}
+        fi
+        [[ $del =~ ^[1-9][0-9]*(-[1-9][0-9]*)?(,[1-9][0-9]*(-[1-9][0-9]*)?)*$ ]] || {
+          echo "hint: --delete needs entry numbers: N, N,M or N-M" >&2; exit 2; } ;;
       -c|--count) opts+=(--count); count=1 ;;
       --) shift; words+=("$@"); break ;;
       -?*) usage ;;
@@ -85,10 +97,12 @@ past() {
     shift
   done
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
-  # --show stands alone: no words, --last or --count with it.
-  if [ -n "$show" ]; then
-    [ "$mode" = history ] && [ ${#words[@]} -eq 0 ] && [ -z "$count$last" ] || usage
-    exec hintdb log --show "$show"
+  # --show and --delete stand alone: no words, --last, --count or each other.
+  if [ -n "$show$del" ]; then
+    [ "$mode" = history ] && [ ${#words[@]} -eq 0 ] && [ -z "$count$last" ] \
+      && [ -z "$show" -o -z "$del" ] || usage
+    [ -n "$show" ] && exec hintdb log --show "$show"
+    exec hintdb log --delete "$del"
   fi
   # `hint history 20`: a lone number is the last N, not a word.
   if [ "$form" = word ] && [ "$mode" = history ] && [ ${#words[@]} -eq 1 ] \
@@ -127,7 +141,7 @@ case "$1" in
     for a in "${@:2}"; do
       if [ -n "$skip" ]; then skip=; continue; fi
       case "$a" in
-        -n|--last|-s|--show) skip=1 ;;
+        -n|--last|-s|--show|-d|--delete) skip=1 ;;
         -?*) ;;
         *) plain=$((plain + 1)) ;;
       esac

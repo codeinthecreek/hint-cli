@@ -19,6 +19,7 @@ temp file that atomically replaces the DB, because dedup is global across source
   hintdb log [--printed] [-n N] [-c] [WORD...]       past questions containing all
                                                      WORDs (--printed: past commands)
   hintdb log --show N                                the full entry number N
+  hintdb log --delete N[,N|N-M]...                   delete entries from the log
 
 Query log: each `find` from the command line appends one JSON line (time,
 question, guesses, printed lines, each printed row's source files) to
@@ -29,6 +30,7 @@ separate man.db, rebuilt only when man-db's index changes; used for the summary
 on model-suggested tools and listed by `query`. Set HINTDB_NO_MAN=1 to disable.
 """
 import argparse
+import fcntl
 import glob
 import hashlib
 import json
@@ -1125,9 +1127,10 @@ def find(text, guesses, debug=False, rows=None):
 
 
 def log_lookup(query, guesses, printed, rows):
-    """Append one JSON line per lookup to LOG. A single O_APPEND write, so
-    lookups from several terminals do not interleave. Failing to log only
-    warns: the answer has already been printed."""
+    """Append one JSON line per lookup to LOG. A single O_APPEND write under
+    an exclusive flock, so lookups from several terminals do not interleave
+    and none is lost during a --delete. Failing to log only warns: the
+    answer has already been printed."""
     rec = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "query": query,
            "guesses": guesses, "printed": printed, "rows": rows}
     data = (json.dumps(rec, ensure_ascii=True) + "\n").encode()
@@ -1137,9 +1140,10 @@ def log_lookup(query, guesses, printed, rows):
             os.makedirs(d, exist_ok=True)
         fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
             os.write(fd, data)
         finally:
-            os.close(fd)
+            os.close(fd)   # closing releases the lock
     except OSError as e:
         print(f"hintdb: cannot write query log {LOG}: {e}", file=sys.stderr)
 
@@ -1220,6 +1224,64 @@ def log_search(words):
     return out
 
 
+def parse_numbers(spec):
+    """"41", "41,42", "41-45" or a mix -> (single numbers, ranges)."""
+    singles, ranges = [], []
+    for part in spec.split(","):
+        m = re.fullmatch(r"([1-9]\d*)(?:-([1-9]\d*))?", part.strip())
+        if not m:
+            return None
+        a = int(m.group(1))
+        if m.group(2):
+            b = int(m.group(2))
+            if b < a:
+                return None
+            ranges.append((a, b))
+        else:
+            singles.append(a)
+    return singles, ranges
+
+
+def log_delete(spec):
+    """Blank the log lines of the given entries. Lines are blanked, not
+    removed, so other entries keep their numbers. Every single number must
+    be an entry, or nothing is deleted; a range deletes the entries in it.
+    The file is rewritten in place under the same flock the appends take.
+    Returns (deleted entries, error message or None)."""
+    nums = parse_numbers(spec)
+    if nums is None:
+        return [], f"not an entry number, list or range: {spec}"
+    singles, ranges = nums
+    try:
+        f = open(LOG, "r+", encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return [], "the query log is empty"
+    with f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        lines = f.readlines()
+        entries = {}
+        for n, line in enumerate(lines, 1):
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and isinstance(rec.get("query"), str):
+                rec["n"] = n
+                entries[n] = rec
+        missing = [n for n in singles if n not in entries]
+        if missing:
+            return [], "no entry %s in the query log; nothing deleted" % ", ".join(map(str, missing))
+        todo = set(singles) | {n for a, b in ranges for n in entries if a <= n <= b}
+        if not todo:
+            return [], f"no entries in {spec}; nothing deleted"
+        for n in todo:
+            lines[n - 1] = "\n"
+        f.seek(0)
+        f.write("".join(lines))
+        f.truncate()
+    return [entries[n] for n in sorted(todo)], None
+
+
 def log_show(n):
     """The full entry with line number n: header, then the printed lines."""
     for r in read_log():
@@ -1263,6 +1325,8 @@ def main():
     lg.add_argument("-n", "--last", type=int, default=10, help="last N matching lines")
     lg.add_argument("-c", "--count", action="store_true", help="print the number of matching lines")
     lg.add_argument("-s", "--show", type=int, metavar="N", help="the full entry number N")
+    lg.add_argument("-d", "--delete", metavar="N[,N|N-M]...",
+                    help="delete entries (their numbers stay unused)")
     lg.add_argument("words", nargs="*")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
@@ -1312,6 +1376,13 @@ def main():
         sys.stdout.flush()
         log_lookup(args.query, args.guesses, out, rows)
     elif args.op == "log":
+        if args.delete is not None:
+            done, err = log_delete(args.delete)
+            for r in done:
+                print("deleted %5d  %s  %s" % (r["n"], log_time(r), r["query"]))
+            if err:
+                sys.exit("hintdb: " + err)
+            sys.exit(0)
         if args.show is not None:
             lines = log_show(args.show)
             if lines is None:

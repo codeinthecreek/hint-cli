@@ -193,11 +193,23 @@ hint -S --count docker
 | `-n`, `--last N` | only the last N matching lines (default 10) |
 | `-c`, `--count` | print the number of matching lines instead |
 | `-s`, `--show NUM` | the full answer of lookup NUM; `history` and `-H` only, on its own (no words, `-n` or `-c`) |
+| `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log; `history` and `-H` only, on its own |
 
 Options can go before or after the words. `-n` and `-c` work with all four
-forms; `--show` only with `history` and `-H`. A
-lookup's number is its line in the log file, so deleting lines from the
-log by hand renumbers the ones after them.
+forms; `--show` and `--delete` only with `history` and `-H`.
+
+To keep lookups you didn't mean (a typo, a line that went to the model by
+mistake) out of `history` and `search`, delete them by number, like bash
+`history -d`:
+
+```bash
+hint history --delete 41,42
+```
+
+A deleted lookup's line is blanked, so the others keep their numbers. If a
+listed number is not in the log, nothing is deleted; a range (`41-45`)
+deletes the lookups in it. Deleting lines from the log by hand instead
+renumbers the ones after them.
 
 `hint help` alone prints the usage; `hint help me ...` is a question.
 
