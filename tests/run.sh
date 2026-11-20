@@ -168,7 +168,7 @@ has "stats per source: one entry" "$out" "$fix/notes/cluster.md	1 entry, 1 only 
 if [ "$(grep -A99 '^man' <<<"$out" | grep -c ' only from this source')" = 4 ]; then
   ok "stats per source: one line per source file, after the kind and man lines"
 else bad "stats per source: one line per source file, after the kind and man lines" "$out"; fi
-line "stats per source: most entries first" "$out" 4 "$fix/history	31 entries, 30 only from this source"
+line "stats per source: most entries first" "$(grep -A1 "^man" <<<"$out")" 2 "$fix/history	31 entries, 30 only from this source"
 has "stats per source: home shown as ~" "$(HOME="$root" hintdb stats)" \
   "~/tests/fixtures/history	31 entries"
 
@@ -211,6 +211,26 @@ has "make: *.mk detected" "$rec" "shellcheck --severity=warning *.sh	make lint"
 has "just: \\ lines joined, continuation keeps its dashes" "$rec" \
   "docker compose up -d --remove-orphans	just up"
 lacks "just: for loop dropped" "$rec" "kubectl apply"
+lacks "recipes: echo lines dropped (@echo and plain echo)" "$rec" "echo"
+rdb() { HINTDB_DB="$tmp/recipes.db" HINTDB_SOURCES="$tmp/recipes_sources" \
+  HISTFILE="$tmp/empty_history" hintdb "$@"; }
+out=$(rdb find -q "pack the docs folder" 2>&1)
+has "make: status label says your Makefile" "$out" \
+  "  # your Makefile: make backup; pack the docs folder"
+out=$(rdb find -q "unpack the docs backup" 2>&1)
+has "just: status label says your justfile" "$out" \
+  "  # your justfile: just restore; unpack the docs backup"
+has "stats: Makefile and justfile entries counted per kind" "$(rdb stats)" "make	5 entries"
+out=$(python3 - "$root/hintdb" <<'EOF'
+import importlib.machinery, sys
+h = importlib.machinery.SourceFileLoader("h", sys.argv[1]).load_module()
+for line in ("  # your Makefile: make up", "  # your justfile: just up"):
+    print(repr(h.status_note(line)))
+EOF
+)
+if [ "$out" = "'make up'
+'just up'" ]; then ok "search: Makefile and justfile labels do not match"
+else bad "search: Makefile and justfile labels do not match" "$out"; fi
 
 echo "== query (keyword search, debugging only)"
 out=$(hintdb query DNS lookup)

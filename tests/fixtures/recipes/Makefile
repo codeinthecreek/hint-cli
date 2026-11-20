@@ -24,3 +24,7 @@ nodes:
 
 %.o: %.c
 	cc -c $< -o $@
+
+backup: ## pack the docs folder
+	@echo "packing docs into $@.tgz"
+	tar -czf docs.tgz docs

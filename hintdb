@@ -406,7 +406,8 @@ def extract_text(path):
 # continues on the next line; the pieces are joined into one command, then
 # the recipe prefixes (@ - +) are stripped once, from its start. Only single
 # simple commands are kept: a joined line starting with a shell keyword or
-# containing an unquoted ; && || (if-blocks, loops, chains) is dropped whole.
+# containing an unquoted ; && || (if-blocks, loops, chains) is dropped whole,
+# and so is echo (progress messages, not commands to recall).
 # The doc comment is the comment line directly above the recipe (a blank line
 # in between ends it, so section dividers are not taken); in a Makefile a
 # `## doc` on the target line comes first.
@@ -453,7 +454,7 @@ def recipe_commands(body, make):
         if make:
             line = line.replace("$$", "$")
         cmd, note = split_comment(line)
-        if cmd and simple_command(cmd):
+        if cmd and simple_command(cmd) and cmd.split()[0] != "echo":
             yield cmd, note
 
 
@@ -571,7 +572,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "12"
+SCHEMA_VERSION = "13"
 
 
 def fingerprint(files):
@@ -647,7 +648,8 @@ def build(files):
         # Templated rows show real examples (most recent first); plain rows
         # show up to 2 other variants.
         examples = [best] + by_count[:1] if display != best else by_count[:2]
-        kind = "history" if "history" in g["kinds"] else "note"
+        # The status label's kind: history first, then a recipe file, then notes.
+        kind = next((k for k in ("history", "make", "just") if k in g["kinds"]), "note")
         prog, args, data = split_cmd(best)
         cmdword = os.path.basename(prog.split()[0]) if prog else ""
         vnotes = g["vnotes"]
@@ -1164,7 +1166,8 @@ def find(text, guesses, debug=False, rows=None):
 
         def row_lines(x):
             display, examples, note, count, kind = x[7], x[8], x[9], x[5], x[11]
-            status = (f"your history x{count}" if kind == "history" else "your notes")
+            status = (f"your history x{count}" if kind == "history"
+                      else SOURCE_LABEL.get(kind, "your notes"))
             status += f": {note}" if note else ""
             ex = json.loads(examples) if examples else []
             if "<" in display and ex:
@@ -1300,12 +1303,14 @@ def log_history(words):
             for r in read_log() if has_words(r["query"], words)]
 
 
-STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your notes)(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
+SOURCE_LABEL = {"make": "your Makefile", "just": "your justfile"}
+STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your (?:notes|Makefile|justfile))(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
 
 
 def status_note(line):
     """The note of a printed status line, without its label ("your history
-    x3: ", "your notes: ", "model suggestion"), so labels do not match."""
+    x3: ", "your notes: ", "your Makefile: ", "model suggestion"), so labels
+    do not match."""
     if not line.startswith("  #"):
         return ""
     return STATUS_LABEL.sub("", line, count=1)

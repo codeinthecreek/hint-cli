@@ -213,8 +213,8 @@ What `hint history --show 57` prints:
   question.
 - **search** prints one line per command that was printed, then the number,
   date and question of the newest lookup that printed it, and how many did.
-  A command's note counts for matching; the "your history" and "your notes"
-  labels do not.
+  A command's note counts for matching; the "your history", "your notes",
+  "your Makefile" and "your justfile" labels do not.
 - **--show** prints the whole answer, each of your rows followed by the
   files it came from, so a row you don't want can be found and fixed in its
   source (`grep -n` on the example in its status line).
@@ -444,7 +444,7 @@ Data flow from sources to the printed answer, traced with the example query
   Makefiles ---------+   - md: shell fences + "$ " lines; note = heading,
           |                prose line, "# comment" above
           |              - just, make: recipe lines, "\" lines joined, only
-          |                single commands (no if/for, ; && ||);
+          |                single commands (no if/for, ; && ||, echo);
           |                note = "just|make <recipe>" + doc
           v
   clean   drop: trivial (ls, cd, vim file ...) unless noted

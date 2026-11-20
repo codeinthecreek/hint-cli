@@ -4,3 +4,8 @@ up:
     @docker compose up -d \
       --remove-orphans
     for f in *.yaml; do kubectl apply -f "$f"; done
+
+# unpack the docs backup
+restore:
+    echo unpacking
+    tar -xzf docs.tgz -C /srv/restore

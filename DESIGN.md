@@ -403,6 +403,10 @@ other words, so the limitation stays (README).
   that starts with a shell keyword (if, for, while, ...) or has an
   unquoted `;`, `&&` or `||` is dropped whole, not split (a real Makefile
   tested 2026-11-18 gave 86 rows, ~60 of them shell fragments like `fi`).
+  `echo` lines are dropped too: progress messages, and merged with history
+  echoes they made a top row (`echo <STR> x11`, 2026-11-20). A row from a
+  recipe file is labelled "your Makefile" or "your justfile" instead of
+  "your notes" (history still comes first when a row is in both).
   Splitting such lines into their commands was the other option; left for
   shell scripts, where it is needed. The note is `just|make <recipe>` plus
   the doc: a `## doc` on a Makefile target line, else the comment line
@@ -463,7 +467,8 @@ other words, so the limitation stays (README).
     number, time, question.
   - `--printed` (search): grep over past commands. One line per printed
     command line (not the `#` lines) whose text or note matches; the
-    status labels ("your history xN", "your notes", "model suggestion")
+    status labels ("your history xN", "your notes", "your Makefile",
+    "your justfile", "model suggestion")
     are not matched, or `search history` would match every row. A command
     printed by several lookups shows once, with the newest lookup's number,
     date and question and the count. Commands are never truncated.
