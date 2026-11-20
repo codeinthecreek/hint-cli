@@ -16,12 +16,21 @@ temp file that atomically replaces the DB, because dedup is global across source
   hintdb query [-n N] [--no-update] WORDS...         find's ranking for the words
                                                      alone, with scores (debugging)
   hintdb stats                                       row counts, for checking dedup
+  hintdb log [--printed] [-n N] [-c] [WORD...]       past questions containing all
+                                                     WORDs (--printed: past commands)
+  hintdb log --show N                                the full entry number N
+  hintdb log --delete N[,N|N-M]...                   delete entries from the log
+
+Query log: each `find` from the command line appends one JSON line (time,
+question, guesses, printed lines, each printed row's source files) to
+~/.local/share/hintdb/queries.jsonl, or HINTDB_LOG (/dev/null turns it off).
 
 Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
 separate man.db, rebuilt only when man-db's index changes; used for the summary
 on model-suggested tools and listed by `query`. Set HINTDB_NO_MAN=1 to disable.
 """
 import argparse
+import fcntl
 import glob
 import hashlib
 import json
@@ -40,6 +49,7 @@ XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
 XDG_CONF = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
+LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
 
 KINDS = ("history", "md", "text", "just")
 NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just"}
@@ -202,7 +212,7 @@ def token_shape(t):
 def template(variants):
     """Display form for a group: tokens identical in every variant are kept
     as written in variants[0]; tokens that vary become placeholders
-    (jl@<HOST>, /var/log/<PATH>, <FILE>, <N> ...)."""
+    (user@<HOST>, /var/log/<PATH>, <FILE>, <N> ...)."""
     if len(variants) < 2:
         return variants[0]
     toks = [TOKEN.findall(v) for v in variants]
@@ -999,10 +1009,12 @@ def open_db():
     return sqlite3.connect(DB)
 
 
-def find(text, guesses, debug=False):
+def find(text, guesses, debug=False, rows=None):
     """The user's rows for the question `text`, scored by bm25 of its words
     plus the guesses' tools, flags and words; then the model's guesses. Two
-    lines per result: command, status. Returns [] when nothing was found."""
+    lines per result: command, status. Returns [] when nothing was found.
+    When `rows` is a list, each printed row of the user's is appended to it as
+    {"line": ..., "sources": [...]}, for the query log."""
     def dbg(msg):
         if debug:
             print("hintdb: " + msg, file=sys.stderr)
@@ -1030,7 +1042,7 @@ def find(text, guesses, debug=False):
         # shared with a guess) is shown at most once per tool, and its place is
         # not refilled: when the evidence runs out the list gets shorter.
         mine, shapes, keys, missing = [], set(), set(), {}
-        tool_only, skipped = set(), 0
+        tool_only, skipped, miss = set(), 0, []
         for x in scored:
             if len(mine) + skipped >= MAX_ROWS:
                 break
@@ -1044,6 +1056,7 @@ def find(text, guesses, debug=False):
                 if len(m["rows"]) < MAX_ROWS:
                     m["rows"].append(x[7])
                     m["sources"].update(json.loads(x[12] or "[]"))
+                    miss.append({"line": x[7], "sources": json.loads(x[12] or "[]")})
                 continue
             if x[3] == 0 and not any(x[6] in found[t] for t in terms if t != cmdword):
                 if cmdword in tool_only:
@@ -1052,6 +1065,9 @@ def find(text, guesses, debug=False):
                 tool_only.add(cmdword)
             mine.append(x)
             shapes.add(shp)
+        if rows is not None:   # in printed order: the user's rows, then uninstalled ones
+            rows.extend({"line": x[7], "sources": json.loads(x[12] or "[]")} for x in mine)
+            rows.extend(miss)
 
         theirs = [g for g in guesses if installed(tool_of(g)) and shape(g) not in shapes]
         # Who leads: the user's best row, when it holds more than half the
@@ -1107,6 +1123,200 @@ def find(text, guesses, debug=False):
         out.extend("#   " + g for g in guesses)
     return out
 
+# ---------------------------------------------------------------- query log
+
+
+def log_lookup(query, guesses, printed, rows):
+    """Append one JSON line per lookup to LOG. A single O_APPEND write under
+    an exclusive flock, so lookups from several terminals do not interleave
+    and none is lost during a --delete. Failing to log only warns: the
+    answer has already been printed."""
+    rec = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "query": query,
+           "guesses": guesses, "printed": printed, "rows": rows}
+    data = (json.dumps(rec, ensure_ascii=True) + "\n").encode()
+    try:
+        d = os.path.dirname(LOG)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            os.write(fd, data)
+        finally:
+            os.close(fd)   # closing releases the lock
+    except OSError as e:
+        print(f"hintdb: cannot write query log {LOG}: {e}", file=sys.stderr)
+
+def read_log():
+    """Entries of the query log, oldest first, each with its line number in
+    the file as "n" (stable: the log is only appended to). Unreadable lines
+    are skipped but keep their numbers."""
+    out = []
+    try:
+        with open(LOG, encoding="utf-8", errors="replace") as f:
+            for n, line in enumerate(f, 1):
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and isinstance(rec.get("query"), str):
+                    rec["n"] = n
+                    out.append(rec)
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def has_words(text, words):
+    text = text.lower()
+    return all(w.lower() in text for w in words)
+
+
+def printed_of(rec):
+    return [x for x in rec.get("printed") or [] if isinstance(x, str)]
+
+
+def log_time(rec):
+    return str(rec.get("time", "")).replace("T", " ")[:16]
+
+
+def log_history(words):
+    """One line per lookup whose question contains every word
+    (case-insensitive substrings): number, time, question."""
+    return ["%5d  %s  %s" % (r["n"], log_time(r), r["query"])
+            for r in read_log() if has_words(r["query"], words)]
+
+
+STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your notes)(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
+
+
+def status_note(line):
+    """The note of a printed status line, without its label ("your history
+    x3: ", "your notes: ", "model suggestion"), so labels do not match."""
+    if not line.startswith("  #"):
+        return ""
+    return STATUS_LABEL.sub("", line, count=1)
+
+
+def log_search(words):
+    """One line per printed command whose text or status comment contains
+    every word, like grep over past answers. Only command lines are shown;
+    a command printed by several lookups is shown once, with its newest
+    lookup (number, date, question) and how many lookups printed it."""
+    hits = {}   # command -> [newest rec, lookups]
+    for rec in read_log():
+        lines = printed_of(rec)
+        seen = set()
+        for i, cmd in enumerate(lines):
+            if cmd[:1] in ("#", " ", ""):
+                continue
+            note = status_note(lines[i + 1]) if i + 1 < len(lines) else ""
+            if cmd in seen or not has_words(cmd + "\n" + note, words):
+                continue
+            seen.add(cmd)
+            h = hits.pop(cmd, [None, 0])   # re-insert: order by newest lookup
+            hits[cmd] = [rec, h[1] + 1]
+    out = []
+    for cmd, (rec, k) in hits.items():
+        tail = "%d  %s %s" % (rec["n"], log_time(rec)[:10], rec["query"])
+        tail += f" (x{k})" if k > 1 else ""
+        out.append(f"{cmd}  # {tail}")
+    return out
+
+
+def parse_numbers(spec):
+    """"41", "41,42", "41-45" or a mix -> (single numbers, ranges)."""
+    singles, ranges = [], []
+    for part in spec.split(","):
+        m = re.fullmatch(r"([1-9]\d*)(?:-([1-9]\d*))?", part.strip())
+        if not m:
+            return None
+        a = int(m.group(1))
+        if m.group(2):
+            b = int(m.group(2))
+            if b < a:
+                return None
+            ranges.append((a, b))
+        else:
+            singles.append(a)
+    return singles, ranges
+
+
+def log_delete(spec):
+    """Blank the log lines of the given entries. Lines are blanked, not
+    removed, so other entries keep their numbers. Every single number must
+    be an entry, or nothing is deleted; a range deletes the entries in it.
+    The file is rewritten in place under the same flock the appends take.
+    Returns (deleted entries, error message or None)."""
+    nums = parse_numbers(spec)
+    if nums is None:
+        return [], f"not an entry number, list or range: {spec}"
+    singles, ranges = nums
+    try:
+        f = open(LOG, "r+", encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return [], "the query log is empty"
+    with f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        lines = f.readlines()
+        entries = {}
+        for n, line in enumerate(lines, 1):
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and isinstance(rec.get("query"), str):
+                rec["n"] = n
+                entries[n] = rec
+        missing = [n for n in singles if n not in entries]
+        if missing:
+            return [], "no entry %s in the query log; nothing deleted" % ", ".join(map(str, missing))
+        todo = set(singles) | {n for a, b in ranges for n in entries if a <= n <= b}
+        if not todo:
+            return [], f"no entries in {spec}; nothing deleted"
+        for n in todo:
+            lines[n - 1] = "\n"
+        f.seek(0)
+        f.write("".join(lines))
+        f.truncate()
+    return [entries[n] for n in sorted(todo)], None
+
+
+def tilde(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
+
+
+def log_show(n):
+    """The full entry with line number n: header, then the printed lines,
+    each of the user's rows followed by `# from <source files>` (from the
+    log's rows), so the line can be found and fixed in its source."""
+    for r in read_log():
+        if r["n"] != n:
+            continue
+        src = {}
+        for row in r.get("rows") or []:
+            if isinstance(row, dict) and isinstance(row.get("line"), str):
+                src.setdefault(row["line"], [str(p) for p in row.get("sources") or []])
+        printed = printed_of(r)
+        out = ["%5d  %s  %s" % (n, log_time(r), r["query"])]
+        for i, x in enumerate(printed):
+            out.append("  " + x)
+            if x.startswith("#   "):          # a "not installed" row
+                cmd, indent = x[4:], "#     "
+            elif x[:1] not in ("#", " ", ""):  # a command line
+                cmd, indent = x, "  # "
+                if i + 1 < len(printed) and printed[i + 1].startswith("  #"):
+                    continue                   # added after its status line
+            elif x.startswith("  #") and i > 0 and printed[i - 1][:1] not in ("#", " ", ""):
+                cmd, indent = printed[i - 1], "  # "
+            else:
+                continue
+            if src.get(cmd):
+                out.append("  " + indent + "from " + ", ".join(tilde(p) for p in src[cmd]))
+        return out if printed else out + ["  (nothing found)"]
+    return None
+
 # ---------------------------------------------------------------- cli
 
 
@@ -1136,6 +1346,15 @@ def main():
     fd.add_argument("--no-update", action="store_true")
     fd.add_argument("--debug", action="store_true", help="scores to stderr")
     fd.add_argument("guesses", nargs="*", help="the model's guessed commands")
+    lg = sub.add_parser("log")
+    lg.add_argument("--printed", action="store_true",
+                    help="grep the printed commands instead of the questions")
+    lg.add_argument("-n", "--last", type=int, default=10, help="last N matching lines")
+    lg.add_argument("-c", "--count", action="store_true", help="print the number of matching lines")
+    lg.add_argument("-s", "--show", type=int, metavar="N", help="the full entry number N")
+    lg.add_argument("-d", "--delete", metavar="N[,N|N-M]...",
+                    help="delete entries (their numbers stay unused)")
+    lg.add_argument("words", nargs="*")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
     q.add_argument("--no-update", action="store_true")
@@ -1177,8 +1396,35 @@ def main():
     elif args.op == "find":
         if not args.no_update:
             update()
-        for line in find(args.query, args.guesses, args.debug):
+        rows = []
+        out = find(args.query, args.guesses, args.debug, rows)
+        for line in out:
             print(line)
+        sys.stdout.flush()
+        log_lookup(args.query, args.guesses, out, rows)
+    elif args.op == "log":
+        if args.delete is not None:
+            done, err = log_delete(args.delete)
+            for r in done:
+                print("deleted %5d  %s  %s" % (r["n"], log_time(r), r["query"]))
+            if err:
+                sys.exit("hintdb: " + err)
+            sys.exit(0)
+        if args.show is not None:
+            lines = log_show(args.show)
+            if lines is None:
+                sys.exit(f"hintdb: no entry {args.show} in the query log")
+            print("\n".join(lines))
+            sys.exit(0)
+        if args.last < 1:
+            sys.exit("hintdb: --last needs a number of 1 or more")
+        lines = log_search(args.words) if args.printed else log_history(args.words)
+        if args.count:
+            print(len(lines))
+        else:
+            for line in lines[-args.last:]:
+                print(line)
+        sys.exit(0 if lines else 1)
     elif args.op == "query":
         if not args.no_update:
             update()

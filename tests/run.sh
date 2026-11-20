@@ -31,6 +31,7 @@ export PATH="$tmp/bin:$PATH"
 # Isolated index and sources.
 export HINTDB_DB="$tmp/hint.db" HINTDB_MANDB="$tmp/man.db"
 export HINTDB_SOURCES="$tmp/sources" HISTFILE="$fix/history"
+export HINTDB_LOG="$tmp/queries.jsonl"
 export HINTDB_APROPOS="cat $fix/apropos.txt"
 unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL
 
@@ -303,6 +304,39 @@ out=$(hintdb find -q "history without numbers" "fc -ln -10" 2>&1)
 line "shell builtins count as installed (fc, user's row)" "$out" 1 "fc -ln -10"
 has "shell builtins count as installed (fc, user's row)" "$out" "# your history x1"
 
+echo "== query log"
+log="$HINTDB_LOG"
+: > "$log"
+out=$(hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" 2>/dev/null)
+has "log: one line per lookup" "$(wc -l <"$log")" "1"
+rec=$(tail -n1 "$log")
+has "log: the query" "$(jq -r .query <<<"$rec")" "disk usage of directory contents"
+has "log: the guesses as given" "$(jq -r '.guesses | join("|")' <<<"$rec")" "du -sh /tmp/x"
+if [ "$(jq -r '.printed[]' <<<"$rec")" = "$out" ]; then ok "log: printed lines exactly as shown"
+else bad "log: printed lines exactly as shown" "$rec"; fi
+has "log: time stamp" "$(jq -r .time <<<"$rec")" "T"
+has "log: each printed row with its source file" \
+  "$(jq -r '.rows[] | select(.line == "du -sh /srv/current") | .sources[]' <<<"$rec")" "$fix/history"
+lacks "log: model guesses have no row entry" "$(jq -r '.rows[].line' <<<"$rec")" "/tmp/x"
+
+hintdb find -q "zzqq frobnicate" >/dev/null 2>&1
+has "log: a lookup that printed nothing is logged too" "$(wc -l <"$log")" "2"
+has "log: nothing printed" "$(tail -n1 "$log" | jq -c .printed)" "[]"
+
+hintdb find -q "list jobs" "fakesched -Nel" >/dev/null 2>&1
+rec=$(tail -n1 "$log")
+has "log: uninstalled rows logged with their source" \
+  "$(jq -r '.rows[] | select(.line | startswith("fakesched")) | .sources[]' <<<"$rec")" "cluster.md"
+
+out=$(HINTDB_LOG="$tmp/newdir/sub/queries.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" 2>/dev/null)
+has "log: missing directory is created" "$(cat "$tmp/newdir/sub/queries.jsonl" 2>/dev/null | wc -l)" "1"
+mkdir -p "$tmp/ro"; chmod 500 "$tmp/ro"
+out=$(HINTDB_LOG="$tmp/ro/queries.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" 2>"$tmp/err")
+status "log: unwritable log does not fail the lookup" 0 $?
+has "log: unwritable log: answer still printed" "$out" "du -sh /srv/current"
+has "log: unwritable log: warning" "$(cat "$tmp/err")" "hintdb: cannot write query log"
+chmod 700 "$tmp/ro"
+
 echo "== hint (stub Ollama)"
 reply="$tmp/reply"
 export STUB_REPLY_FILE="$reply"
@@ -314,6 +348,22 @@ export OLLAMA_HOST="127.0.0.1:$(cat "$tmp/port")"
 
 hint >/dev/null 2>&1
 status "no arguments: usage, exit 2" 2 $?
+out=$(hint help 2>&1)
+status "help alone: exit 2" 2 $?
+has "help alone: usage" "$out" "usage: hint"
+out=$(hint -h dns lookup 2>&1)
+status "-h with more words: usage, exit 2" 2 $?
+out=$(hint --help 2>&1)
+status "--help: usage, exit 2" 2 $?
+
+printf '%s\n' 'du -sh /tmp/x' > "$reply"
+out=$(hint help me find large files 2>&1)
+status "help followed by words is a question: exit 0" 0 $?
+lacks "help followed by words: no usage" "$out" "usage: hint"
+has "help followed by words: whole line sent as the query" \
+  "$(jq -r '.messages[-1].content' <"$tmp/request")" "help me find large files"
+has "hint lookups are logged with the whole question" \
+  "$(tail -n1 "$HINTDB_LOG" | jq -r .query)" "help me find large files"
 
 printf '%s\n' '```bash' '1. dig +short example.com' '' '$ ssh -L 8080:localhost:80 user@remote_host' \
   '- nslookup example.com' 'host example.com' '```' > "$reply"
@@ -387,6 +437,231 @@ out=$(HINT_MODEL=nosuch hint dns lookup 2>&1)
 status "Ollama error: exit 1" 1 $?
 has "Ollama error: shows Ollama's message" "$out" \
   "returned an error (model nosuch): model \"nosuch\" not found, try pulling it first"
+
+echo "== hint history / search (query log)"
+flog="$fix/queries.jsonl"   # 12 synthetic entries on lines 1-3, 5-13; line 4 is damaged
+H() { HINTDB_LOG="$flog" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }   # no model reachable
+
+out=$(H search 2>&1)
+status "search alone: usage, exit 2" 2 $?
+has "search alone: usage lists the options" "$out" "-n, --last N"
+out=$(H history 2>&1)
+status "history alone: exit 0" 0 $?
+has "history alone: the last 10 lookups, like bash history" "$(wc -l <<<"$out")" "10"
+line "history alone: newest last" "$out" 10 "   13  2026-11-12 09:00  remove old host key"
+if [ "$out" = "$(H --history 2>&1)" ]; then ok "history alone: same as --history"
+else bad "history alone: same as --history" "$out"; fi
+out=$(H help 2>&1)
+has "usage: history and search forms" "$out" "hint history [OPTIONS] [WORD|N]"
+has "usage: --show" "$out" "hint history --show NUM"
+has "usage: says where options may go" "$out" "OPTIONS, anywhere after history, search, -H or -S:"
+has "usage: says a second word makes a question" "$out" \
+  "With a second WORD, the line is a question for the model instead:"
+
+# history: one line per lookup, numbered by its line in the log.
+out=$(H history registry 2>&1)
+status "history WORD: exit 0 without a model" 0 $?
+line "history WORD: number, time, question" "$out" 1 "    1  2026-11-01 09:00  start the local registry"
+has "history WORD: one line per lookup" "$(wc -l <<<"$out")" "1"
+out=$(H history ssh 2>&1)
+has "history: case-insensitive" "$out" "    2  2026-11-02 09:00  SSH tunnel to postgres"
+has "history: numbers skip the damaged line" "$out" "   12  2026-11-11 09:00  ssh with a key"
+has "history: matches inside words (substring)" "$(H history frob 2>&1)" "zzqq frobnicate"
+out=$(H history keygen 2>&1)
+status "history: matches the question, not the printed lines (exit 1)" 1 $?
+has "history WORD: no match says how to ask instead" "$out" \
+  'hint: no past questions contain "keygen"; to ask it as a question, add a word'
+
+out=$(H history 2 2>&1)
+status "history N: exit 0" 0 $?
+has "history N: last N lookups" "$(wc -l <<<"$out")" "2"
+line "history N: oldest first, newest last" "$out" 2 "   13  2026-11-12 09:00  remove old host key"
+
+# search: grep over past commands.
+out=$(H search keygen 2>&1)
+status "search WORD: exit 0" 0 $?
+line "search WORD: command, then number, date and question" "$out" 1 \
+  "ssh-keygen -R oldhost.example.org  # 13  2026-11-12 remove old host key"
+out=$(H search ssh 2>&1)
+has "search: only command lines" "$(grep -c '^  ' <<<"$out")" "0"
+has "search: one line per command" "$(wc -l <<<"$out")" "3"
+has "search: matches a command's note" "$(H search registry-up 2>&1)" \
+  "docker run -d -p 5000:5000 registry:3  # 1  2026-11-01 start the local registry"
+lacks "search: not the question" "$(H search frobnicate 2>&1)" "zzqq"
+out=$(H search history 2>&1)
+status "search: status labels (your history, your notes) do not match" 1 $?
+has "search: a number is a word" "$(H search 5432 2>&1)" "ssh -N -L 5432:localhost:5432 db.example.org"
+has "search WORD: no match message" "$(H search zzzz 2>&1)" \
+  'hint: no past commands contain "zzzz"; to ask it as a question, add a word'
+dlog="$tmp/dup.jsonl"
+printf '%s\n' \
+  '{"time": "2026-11-01T09:00:00", "query": "list containers", "printed": ["docker ps -a", "  # your history x9"]}' \
+  '{"time": "2026-11-02T09:00:00", "query": "a long command", "printed": ["rsync -e \"ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes\" --archive --delete u@build2.example.org:/srv/data/ /home/user/backup/build2/", "  # your history x2"]}' \
+  '{"time": "2026-11-03T09:00:00", "query": "show all containers", "printed": ["docker ps -a", "  # model suggestion", "docker ps -a", "  # model suggestion"]}' > "$dlog"
+out=$(HINTDB_LOG="$dlog" hint search docker 2>&1)
+line "search: a command from several lookups shown once, newest, with a count" "$out" 1 \
+  "docker ps -a  # 3  2026-11-03 show all containers (x2)"
+has "search: long commands not truncated" "$(HINTDB_LOG="$dlog" hint search rsync 2>&1)" \
+  "/home/user/backup/build2/  # 2  2026-11-02 a long command"
+
+# --show: one full entry.
+out=$(H history --show 2 2>&1)
+status "--show NUM: exit 0" 0 $?
+line "--show NUM: header" "$out" 1 "    2  2026-11-02 09:00  SSH tunnel to postgres"
+line "--show NUM: printed lines indented" "$out" 2 "  ssh -N -L 5432:localhost:5432 db.example.org"
+line "--show NUM: status lines as shown" "$out" 3 "    # your history x1: tunnel to postgres"
+has "-s NUM" "$(H history -s 1 2>&1)" "  docker run -d -p 5000:5000 registry:3"
+has "--show=NUM" "$(H history --show=1 2>&1)" "start the local registry"
+H search --show 1 >/dev/null 2>&1
+status "search --show: usage (history only)" 2 $?
+H -S --show 1 >/dev/null 2>&1
+status "-S --show: usage (history only)" 2 $?
+has "usage: --show is for history only" "$(H help 2>&1)" "After history or -H only"
+has "-H -s NUM" "$(H -H -s 1 2>&1)" "start the local registry"
+has "--show: nothing found shown" "$(H history --show 3 2>&1)" "  (nothing found)"
+out=$(H history --show 4 2>&1)
+status "--show on a damaged line: exit 1" 1 $?
+has "--show: no such entry" "$out" "hintdb: no entry 4 in the query log"
+has "--show: past the end" "$(H history --show 99 2>&1)" "hintdb: no entry 99 in the query log"
+for a in "ssh --show 2" "--show 2 -c" "--show 2 -n 3" "5 --show 2" "--show" "--show x"; do
+  H history $a >/dev/null 2>&1
+  status "--show with other things or no number ($a): exit 2" 2 $?
+done
+
+# --show lists each of the user's rows with its source files.
+slog="$tmp/src.jsonl"
+HINTDB_LOG="$slog" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
+HINTDB_LOG="$slog" hintdb find -q "list jobs" "fakesched -Nel" >/dev/null 2>&1
+out=$(HOME=/nonexistent HINTDB_LOG="$slog" hint history --show 1 2>&1)
+line "--show: the row's source after its status line" "$out" 4 "    # from $fix/history"
+if [ "$(sed -n 3p <<<"$out" | cut -c1-17)" = "    # your histor" ]; then ok "--show: status line first, then the source"
+else bad "--show: status line first, then the source" "$out"; fi
+has "--show: one source line per row" "$(grep -c '# from ' <<<"$out")" "3"
+out=$(HOME="$root" HINTDB_LOG="$slog" hint history --show 1 2>&1)
+has "--show: home shown as ~" "$out" "    # from ~/tests/fixtures/history"
+out=$(HOME=/nonexistent HINTDB_LOG="$slog" hint history --show 2 2>&1)
+line "--show: an uninstalled row's source under it" "$out" 4 "  #     from $fix/notes/cluster.md"
+printf '%s\n' '{"time": "2026-11-01T09:00:00", "query": "q", "printed": ["dig +short example.org", "  # model suggestion"], "rows": []}' > "$tmp/nosrc.jsonl"
+lacks "--show: model suggestions get no source line" "$(HINTDB_LOG="$tmp/nosrc.jsonl" hint history --show 1 2>&1)" "# from"
+
+# --delete: blank entries in a copy of the log; the others keep their numbers.
+cp "$flog" "$tmp/del.jsonl"
+D() { HINTDB_LOG="$tmp/del.jsonl" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }
+out=$(D history -d 2 2>&1)
+status "--delete NUM: exit 0" 0 $?
+line "--delete NUM: says what was deleted" "$out" 1 "deleted     2  2026-11-02 09:00  SSH tunnel to postgres"
+lacks "--delete NUM: gone from history" "$(D history -n 20 2>&1)" "SSH tunnel to postgres"
+has "--delete: other entries keep their numbers" "$(D history -n 20 2>&1)" "   12  2026-11-11 09:00  ssh with a key"
+has "--delete: the file keeps its line count" "$(wc -l <"$tmp/del.jsonl")" "13"
+has "--delete: --show of a deleted entry" "$(D history --show 2 2>&1)" "hintdb: no entry 2 in the query log"
+lacks "--delete: gone from search too" "$(D search 5432 2>&1)" "db.example.org"
+out=$(D history -d 2 2>&1)
+status "--delete of a deleted entry: exit 1" 1 $?
+has "--delete of a deleted entry: message" "$out" "hintdb: no entry 2 in the query log; nothing deleted"
+cp "$tmp/del.jsonl" "$tmp/del.before"
+out=$(D history --delete 5,99 2>&1)
+status "--delete with one missing NUM: exit 1" 1 $?
+has "--delete with one missing NUM: names it" "$out" "no entry 99 in the query log; nothing deleted"
+if cmp -s "$tmp/del.jsonl" "$tmp/del.before"; then ok "--delete with one missing NUM: nothing deleted"
+else bad "--delete with one missing NUM: nothing deleted"; fi
+out=$(D history --delete=1,5-7 2>&1)
+has "--delete list and range: all deleted" "$(grep -c '^deleted' <<<"$out")" "4"
+out=$(D -H --delete 3-5 2>&1)
+has "--delete range: only the entries in it (4 damaged, 5 gone)" "$out" "deleted     3"
+has "--delete range: one entry deleted" "$(grep -c '^deleted' <<<"$out")" "1"
+has "--delete: the rest" "$(D history -n 20 2>&1 | wc -l)" "6"
+for a in "history ssh -d 8" "history -d 8 -c" "history -d 8 -n 2" "history -d 8 -s 8" \
+         "history -d" "history -d x" "history -d 8,,9" "search -d 8" "-S -d 8"; do
+  D $a >/dev/null 2>&1
+  status "--delete with other things, no or bad NUM, or after search ($a): exit 2" 2 $?
+done
+has "--delete with nothing changed by the refused calls" "$(D history -n 20 2>&1 | wc -l)" "6"
+has "usage: --delete" "$(H help 2>&1)" "-d, --delete NUM[,NUM|NUM-NUM]..."
+HINTDB_LOG="$tmp/del.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
+has "a lookup after a delete is appended as the next line" \
+  "$(D history -n 1 2>&1)" "   14  "
+if command -v flock >/dev/null; then
+  flock "$tmp/del.jsonl" sleep 1 &
+  lock_pid=$!
+  sleep 0.2
+  t0=$(date +%s%N)
+  HINTDB_LOG="$tmp/del.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
+  t1=$(date +%s%N)
+  wait "$lock_pid"
+  if [ $(( (t1 - t0) / 1000000 )) -ge 500 ]; then ok "a lookup waits for the log lock instead of writing during a delete"
+  else bad "a lookup waits for the log lock instead of writing during a delete" "waited $(( (t1 - t0) / 1000000 )) ms"; fi
+  has "the lookup that waited is in the log" "$(D history -n 1 2>&1)" "   15  "
+fi
+
+# Flag forms.
+out=$(H -H 2>&1)
+has "-H alone: the last 10 lookups" "$(wc -l <<<"$out")" "10"
+lacks "-H: damaged log line skipped" "$out" "not json"
+out=$(H --history ssh key 2>&1)
+has "--history WORDS: all words must match" "$(wc -l <<<"$out")" "1"
+has "--history WORDS: the matching lookup" "$out" "ssh with a key"
+has "-H -n N" "$(H -H -n 3 2>&1 | wc -l)" "3"
+has "-H --last N" "$(H -H --last 3 2>&1 | wc -l)" "3"
+has "-H --last=N" "$(H -H --last=1 key 2>&1)" "remove old host key"
+has "-H with a number searches for it, not a count" "$(H -H 5000 2>&1)" \
+  'hint: no past questions contain "5000"'
+out=$(H -H --last 0 2>&1)
+status "--last 0: exit 2" 2 $?
+has "--last 0: message" "$out" "hint: --last needs a number of 1 or more"
+out=$(H -H --bogus 2>&1)
+status "unknown option: usage, exit 2" 2 $?
+has "flag form: no-match message without the question hint" "$(H -H zzzz 2>&1)" \
+  'hint: no past questions contain "zzzz"'
+lacks "flag form: no 'add a word'" "$(H -H zzzz 2>&1)" "add a word"
+out=$(H -S 2>&1)
+status "-S without words: usage" 2 $?
+has "--search WORDS" "$(H --search docker 2>&1 | wc -l)" "2"
+has "-S --count: number of matching commands" "$(H -S -c ssh 2>&1)" "3"
+out=$(H -H --count zzzz 2>&1)
+status "--count with no match: exit 1" 1 $?
+line "--count with no match: prints 0 only" "$out" 1 "0"
+has "--count: ignores --last" "$(H -H -c -n 2 2>&1)" "12"
+out=$(HINTDB_LOG="$tmp/none.jsonl" hint history 3 2>&1)
+has "no log yet: says so" "$out" "hint: no past questions yet"
+
+# One plain word at most, options anywhere: still a log lookup.
+has "history WORD --count" "$(H history ssh --count 2>&1)" "2"
+has "history --count WORD" "$(H history --count ssh 2>&1)" "2"
+out=$(H history ssh -n 1 2>&1)
+has "history WORD -n N: one lookup" "$(wc -l <<<"$out")" "1"
+has "history WORD -n N: the last match" "$out" "ssh with a key"
+has "history --count alone: all lookups" "$(H history --count 2>&1)" "12"
+has "history --last N alone" "$(H history --last 2 2>&1 | wc -l)" "2"
+has "search WORD -c" "$(H search docker -c 2>&1)" "2"
+has "history N --count: the number is ignored" "$(H history 20 --count 2>&1)" "12"
+out=$(H history ssh -x 2>&1)
+status "history with an unknown option: usage, exit 2" 2 $?
+has "history with an unknown option: usage shown" "$out" "OPTIONS, anywhere after"
+out=$(H history -n 2>&1)
+status "history -n without a number: usage" 2 $?
+out=$(H search -c 2>&1)
+status "search with an option but no word: usage" 2 $?
+
+printf '%s\n' 'fc -ln -10' > "$reply"
+hint history postgres docker >/dev/null 2>&1
+has "history + two plain words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "history postgres docker"
+hint history without the -a flag >/dev/null 2>&1
+has "history + words + an unknown dash word is a question, not usage" \
+  "$(jq -r '.messages[-1].content' <"$tmp/request")" "history without the -a flag"
+hint search docker images --count >/dev/null 2>&1
+has "search + two plain words and an option is a question" \
+  "$(jq -r '.messages[-1].content' <"$tmp/request")" "search docker images --count"
+out=$(hint history without duplicates 2>&1)
+has "history + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "history without duplicates"
+lacks "history + more words: no usage" "$out" "usage: hint"
+out=$(hint search for files containing foo 2>&1)
+has "search + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "search for files containing foo"
+: > "$HINTDB_LOG"
+hint short dns lookup >/dev/null 2>&1
+has "a lookup can be found again with history" "$(hint history dns 2>&1)" "short dns lookup"
 
 echo
 echo "$pass passed, $fail failed"
