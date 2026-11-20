@@ -184,10 +184,11 @@ status "stats --source: unknown source fails" 1 $?
 has "stats --source: unknown source says so" "$out" "no entries from"
 
 echo "== recipe files (Makefiles, justfiles)"
-# A separate index, so the counts above stay as they are.
-: > "$tmp/empty_history"
+# A separate index, so the counts above stay as they are. Its history
+# only uses bash aliases from the fixture (not on PATH).
+printf '%s\n' 'hless' 'hgrep ssh-keygen' > "$tmp/recipes_history"
 out=$(HINTDB_DB="$tmp/recipes.db" HINTDB_SOURCES="$tmp/recipes_sources" \
-  HISTFILE="$tmp/empty_history" hintdb add "$fix/recipes" 2>&1)
+  HISTFILE="$tmp/recipes_history" hintdb add "$fix/recipes" 2>&1)
 has "recipes: directory walk finds Makefile, *.mk and justfile" "$out" "entries"
 rec=$(python3 - "$tmp/recipes.db" <<'EOF'
 import sqlite3, sys
@@ -214,7 +215,7 @@ lacks "just: for loop dropped" "$rec" "kubectl apply"
 lacks "recipes: @echo lines dropped" "$rec" "packing docs"
 lacks "recipes: plain echo lines dropped" "$rec" "echo unpacking"
 rdb() { HINTDB_DB="$tmp/recipes.db" HINTDB_SOURCES="$tmp/recipes_sources" \
-  HISTFILE="$tmp/empty_history" hintdb "$@"; }
+  HISTFILE="$tmp/recipes_history" hintdb "$@"; }
 out=$(rdb find -q "pack the docs folder" 2>&1)
 has "make: status label says your Makefile" "$out" \
   "  # your Makefile: make backup; pack the docs folder"
@@ -226,14 +227,15 @@ out=$(python3 - "$root/hintdb" <<'EOF'
 import importlib.machinery, sys
 h = importlib.machinery.SourceFileLoader("h", sys.argv[1]).load_module()
 for line in ("  # your Makefile: make up", "  # your justfile: just up",
-             "  # your git aliases: sync"):
+             "  # your git aliases: sync", "  # your aliases: rm -i"):
     print(repr(h.status_note(line)))
 EOF
 )
 if [ "$out" = "'make up'
 'just up'
-'sync'" ]; then ok "search: Makefile, justfile and git alias labels do not match"
-else bad "search: Makefile, justfile and git alias labels do not match" "$out"; fi
+'sync'
+'rm -i'" ]; then ok "search: Makefile, justfile and alias labels do not match"
+else bad "search: Makefile, justfile and alias labels do not match" "$out"; fi
 
 has "git: .git_aliases found in a directory walk, only [alias] read" "$(rdb stats)" "git	7 entries"
 lacks "git: other sections skipped" "$rec" "Example User"
@@ -250,6 +252,25 @@ has "git: the value's trailing comment after the body" "$rec" \
 has "git: \\ continues a value" "$rec" \
   "git pretty	fork/upstream workflow; log --pretty=format:'%h %s' --date=short"
 has "git: escaped quotes in a value" "$rec" "git shout	fork/upstream workflow; !echo \"done\""
+has "alias: .bash_aliases found in a directory walk" "$(rdb stats)" "alias	6 entries"
+has "alias: row is the alias name, block comment as note, then the body" "$rec" \
+  "rmi	safety aliases; rm -i"
+has "alias: a block comment covers every alias in the block" "$rec" "mvi	safety aliases; mv -i"
+lacks "alias: commented-out alias skipped" "$rec" "cpi"
+lacks "alias: wrapper adding options to its own command skipped" "$rec" "ls --color"
+has "alias: several aliases on one line, ; kept in the body" "$rec" \
+  "hless	history aliases; history | less"
+has "alias: after && and with a trailing comment; a blank line ends a block" "$rec" \
+  "del	/usr/bin/trash; move to the trash, not rm"
+has "alias: double quotes removed" "$rec" "tarls	tar -tzf"
+out=$(rdb find -q "page through history with less" 2>&1)
+line "alias: also typed in history, shown (alias names count as installed)" "$out" 1 "hless"
+has "alias: ... labelled with the history count" "$out" "  # your history x2: history aliases; history | less"
+has "alias: a one-off history line using an alias is kept" "$(rdb stats --source "$tmp/recipes_history")" \
+  "hgrep ssh-keygen  [x1]"
+out=$(rdb find -q "move a file to the trash" 2>&1)
+has "alias: shown though the alias is not on PATH, labelled your aliases" "$out" \
+  "  # your aliases: /usr/bin/trash; move to the trash, not rm"
 out=$(rdb find -q "sync the default branch" 2>&1)
 has "git: status label says your git aliases" "$out" \
   "  # your git aliases: sync default branch"

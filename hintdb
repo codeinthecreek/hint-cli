@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """hintdb - cleaned, deduplicated command index for `hint` (SQLite FTS5, stdlib only).
 
-Sources (bash history, markdown/text notes, justfiles, Makefiles, git
-aliases; files or directories) are listed in ~/.config/hintdb/sources. Every
+Sources (bash history, markdown/text notes, justfiles, Makefiles, git and
+bash aliases; files or directories) are listed in ~/.config/hintdb/sources. Every
 ingest is a full clean rebuild into a temp file that atomically replaces the
 DB, because dedup is global across sources.
 `find` and `query` rebuild automatically when any source file changed (mtime/size).
 
-  hintdb add PATH... [--kind history|md|text|just|make|git]
+  hintdb add PATH... [--kind history|md|text|just|make|git|alias]
                                                      register sources, rebuild
   hintdb remove PATH...                              unregister sources, rebuild
   hintdb sources                                     list registered sources
@@ -56,12 +56,13 @@ DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
 LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
 
-KINDS = ("history", "md", "text", "just", "make", "git")
+KINDS = ("history", "md", "text", "just", "make", "git", "alias")
 NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just",
             ".mk": "make"}
 JUST_NAMES = {"justfile", ".justfile"}
 MAKE_NAMES = {"makefile", "gnumakefile"}
 GIT_NAMES = {".gitconfig", ".git_aliases"}
+ALIAS_NAMES = {".bash_aliases", ".bashrc"}
 
 # ---------------------------------------------------------------- cleaning rules
 
@@ -587,9 +588,55 @@ def extract_gitconfig(path):
         yield f"git {m.group(1)}", join_notes(d, " ".join(val.split()), cmt)
 
 
+# Bash aliases (`alias name='body'` lines, also inside if-blocks or after
+# `[ -x ... ] &&`). As for git aliases the row is what you type, the alias
+# name. The note is the comment lines above the block of aliases it is in
+# (a blank line ends a block: "# safety aliases" covers rm, mv and cp), then
+# the body and the line's trailing comment. Commented-out code (`#alias x=`,
+# `#if ...`: no space after the #) is not a comment. An alias that only adds
+# options to the command of the same name (ls='ls --color=auto') is skipped:
+# there is nothing to recall.
+
+ALIAS_LINE = re.compile(r"^\s*(?:.*&&\s*)?alias\s+(.*)$")
+
+
+def extract_bash_aliases(path):
+    """The alias name for each alias; note = block comment + body."""
+    doc, block = [], False
+    for line in read_lines(path):
+        s = line.strip()
+        if not s:
+            doc, block = [], False
+            continue
+        if s.startswith("#"):
+            if s.startswith("# ") or s == "#":
+                if block:  # a comment after aliases starts a new block
+                    doc, block = [], False
+                doc.append(s.lstrip("#").strip())
+            continue
+        m = ALIAS_LINE.match(s)
+        if not m:
+            continue
+        rest, cmt = split_comment(m.group(1))
+        try:
+            words = shlex.split(rest)
+        except ValueError:
+            continue
+        block = True
+        for w in words:
+            name, eq, body = w.partition("=")
+            if not eq or not body.strip():
+                continue
+            body = " ".join(body.split())
+            if body.split()[0] == name:
+                continue
+            yield name, join_notes(" ".join(x for x in doc if x), body, cmt)
+
+
 EXTRACT = {"history": extract_history, "md": extract_markdown,
            "text": extract_text, "just": extract_just,
-           "make": extract_make, "git": extract_gitconfig}
+           "make": extract_make, "git": extract_gitconfig,
+           "alias": extract_bash_aliases}
 
 # ---------------------------------------------------------------- sources
 
@@ -602,6 +649,8 @@ def detect_kind(path):
         return "make"
     if base.lower() in GIT_NAMES or path.endswith(os.sep + os.path.join("git", "config")):
         return "git"
+    if base.lower() in ALIAS_NAMES:
+        return "alias"
     ext = os.path.splitext(base)[1].lower()
     if ext in NOTE_EXT:
         return NOTE_EXT[ext]
@@ -627,7 +676,7 @@ def load_sources():
 def save_sources(srcs):
     os.makedirs(os.path.dirname(SOURCES), exist_ok=True)
     with open(SOURCES, "w") as f:
-        f.write("# kind<TAB>path   kind: history|md|text|just|make|git|auto (auto = detect per file)\n")
+        f.write("# kind<TAB>path   kind: history|md|text|just|make|git|alias|auto (auto = detect per file)\n")
         for kind, path in srcs:
             f.write(f"{kind}\t{path}\n")
 
@@ -654,7 +703,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "15"
+SCHEMA_VERSION = "16"
 
 
 def fingerprint(files):
@@ -673,6 +722,7 @@ def fingerprint(files):
 def build(files):
     groups = {}   # shape -> group dict
     exact = {}    # normalized cmd -> [count, last_seen, kind]
+    aliases = set()   # bash alias names: count as installed, like commands on PATH
     for kind, path in files:
         try:
             rows = list(EXTRACT[kind](path))
@@ -688,6 +738,8 @@ def build(files):
                 continue
             if is_trivial(cmd) and not note:
                 continue
+            if kind == "alias":
+                aliases.add(cmd)
             recency = (i + 1) / total if kind == "history" else 0.0
             e = exact.setdefault(cmd, [0, 0.0, kind])
             e[0] += 1
@@ -710,7 +762,7 @@ def build(files):
 
     def known(word):
         if word not in which_cache:
-            which_cache[word] = ("/" in word or word in BUILTINS
+            which_cache[word] = ("/" in word or word in BUILTINS or word in aliases
                                  or shutil.which(word) is not None)
         return which_cache[word]
 
@@ -730,9 +782,10 @@ def build(files):
         # Templated rows show real examples (most recent first); plain rows
         # show up to 2 other variants.
         examples = [best] + by_count[:1] if display != best else by_count[:2]
-        # The status label's kind: history first, then a recipe file or git
+        # The status label's kind: history first, then a recipe file or
         # aliases, then notes.
-        kind = next((k for k in ("history", "make", "just", "git") if k in g["kinds"]), "note")
+        kind = next((k for k in ("history", "make", "just", "git", "alias") if k in g["kinds"]),
+                    "note")
         prog, args, data = split_cmd(best)
         cmdword = os.path.basename(prog.split()[0]) if prog else ""
         vnotes = g["vnotes"]
@@ -752,7 +805,8 @@ def build(files):
                      max(v[1] for v in variants.values()), kind,
                      json.dumps(sorted(g["sources"]))))
 
-    write_db(DB, ENTRIES_SCHEMA, ENTRIES_INSERT, rows, fingerprint(files))
+    write_db(DB, ENTRIES_SCHEMA, ENTRIES_INSERT, rows, fingerprint(files),
+             {"aliases": json.dumps(sorted(aliases))})
     return len(rows)
 
 
@@ -770,7 +824,7 @@ ENTRIES_SCHEMA = """
 ENTRIES_INSERT = "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 
 
-def write_db(path, schema, insert, rows, fp):
+def write_db(path, schema, insert, rows, fp, meta=None):
     """Build a DB in a temp file next to `path`, then atomically replace it."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
@@ -780,6 +834,7 @@ def write_db(path, schema, insert, rows, fp):
         con.executescript(schema + "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);")
         con.executemany(insert, rows)
         con.execute("INSERT INTO meta VALUES ('fingerprint', ?)", (fp,))
+        con.executemany("INSERT INTO meta VALUES (?, ?)", (meta or {}).items())
         con.commit()
         con.close()
         os.replace(tmp, path)
@@ -1048,9 +1103,13 @@ def show_key(cmdword, shp):
             tuple(t.endswith("/") for t in toks if "<" in t or "/" in t))
 
 
+ALIASES = set()   # bash alias names from the alias sources, loaded by find
+
+
 def installed(tool):
-    """Installed here: on PATH or a shell builtin (or an explicit path)."""
-    return tool in BUILTINS or shutil.which(tool) is not None
+    """Installed here: on PATH, a shell builtin or one of your bash aliases
+    (or an explicit path)."""
+    return tool in BUILTINS or tool in ALIASES or shutil.which(tool) is not None
 
 
 def tool_of(cmd):
@@ -1187,6 +1246,11 @@ def find(text, guesses, debug=False, rows=None):
 
     guesses = list(dict.fromkeys(g for g in (norm(x) for x in guesses) if g))
     con = open_db()
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key='aliases'").fetchone()
+        ALIASES.update(json.loads(row[0]) if row else [])
+    except sqlite3.OperationalError:   # no index yet
+        pass
     try:
         r = score_rows(con, text, guesses, dbg)
         terms, paths, tools, gwords = r["terms"], r["paths"], r["tools"], r["gwords"]
@@ -1386,8 +1450,9 @@ def log_history(words):
             for r in read_log() if has_words(r["query"], words)]
 
 
-SOURCE_LABEL = {"make": "your Makefile", "just": "your justfile", "git": "your git aliases"}
-STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your (?:notes|Makefile|justfile|git aliases))(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
+SOURCE_LABEL = {"make": "your Makefile", "just": "your justfile", "git": "your git aliases",
+                "alias": "your aliases"}
+STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your (?:notes|Makefile|justfile|git aliases|aliases))(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
 
 
 def status_note(line):
