@@ -212,7 +212,7 @@ def token_shape(t):
 def template(variants):
     """Display form for a group: tokens identical in every variant are kept
     as written in variants[0]; tokens that vary become placeholders
-    (jl@<HOST>, /var/log/<PATH>, <FILE>, <N> ...)."""
+    (user@<HOST>, /var/log/<PATH>, <FILE>, <N> ...)."""
     if len(variants) < 2:
         return variants[0]
     toks = [TOKEN.findall(v) for v in variants]

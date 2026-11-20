@@ -15,6 +15,14 @@ A local LLM guesses the command. `hint` then looks up the commands you have
 actually used, by your question's words and the model's guess, and shows them in
 your usual form with the model's guess alongside. Nothing is ever executed.
 
+Every lookup is kept in a local log, so past questions and answers can be
+looked up again without the model, like shell history. Later, `hint search
+tunnel` finds that answer again:
+
+```text
+ssh -L 11434:localhost:11434 -i ~/.ssh/my_key <USER@HOST>  # 12  2026-11-20 how do I create an ssh tunnel
+```
+
 ## How it works
 
 1. **Guess.** `hint` asks an LLM (Ollama chat API, temperature 0) for 1-3
@@ -44,6 +52,8 @@ your usual form with the model's guess alongside. Nothing is ever executed.
      nothing installed was found.
 3. **Print.** Each result is two lines: the command, then a `#` status line
    saying where it came from.
+4. **Log.** The question, the guesses and the printed lines are appended to
+   the query log, for `hint history` and `hint search`.
 
 The index (`hint.db`) is built from your sources:
 
@@ -94,12 +104,17 @@ ollama pull qwen2.5-coder:3b
 ```
 
 On first use, `hintdb` registers `$HISTFILE` (or `~/.bash_history`) as a source.
-Add notes and justfiles. Directories are walked for `*.md`, `*.markdown`,
-`*.txt`, `justfile` and `*.just`; hidden directories are skipped.
+Add the notes files and justfiles you keep for work on this machine, such as a
+cheatsheet or a project's justfile:
 
 ```bash
-hintdb add ~/notes ~/workspace/docs/cheatsheet.md
+hintdb add ~/notes/kubernetes.md ~/src/myproject/justfile
 ```
+
+Register files rather than whole folders of old notes: commands for tools or
+platforms you no longer use come back as noise. (A directory is walked for
+`*.md`, `*.markdown`, `*.txt`, `justfile` and `*.just`, skipping hidden
+directories.)
 
 For commands from the current shell session to be indexed, the shell has to
 write its history out after each command (a script can't do this for the calling
@@ -127,8 +142,10 @@ ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 
 ### Past lookups
 
-Every lookup is kept in the query log (see below). Like shell history, you
-can look through it again without asking the model. The last 10 lookups:
+Every lookup is kept in the query log, and these commands read it without
+asking the model.
+
+The last 10 lookups, like bash `history`:
 
 ```bash
 hint history
@@ -152,35 +169,71 @@ Past commands containing a word, like grep over the answers you were given:
 hint search rsync
 ```
 
-`history` prints one line per lookup: its number, the time and the
-question. `search` prints one line per command that was printed (its note
-counts for matching, but the "your history" and "your notes" labels do
-not), followed by the number, date and question of the newest lookup that
-printed it, and how many lookups did. Both list oldest first, so the newest
-is just above your prompt. Matching is case-insensitive and on plain
-substrings. To see the full answer of a lookup, give its number:
+The full answer of lookup 57, as it was printed:
 
 ```bash
 hint history --show 57
 ```
 
-Each of your rows in it is followed by the files it came from (`# from
-~/.bash_history`), so a row you don't want can be found and fixed in its
-source, with `grep -n` on the example shown in its status line.
+Delete lookups you didn't mean (a typo, a line that went to the model by
+mistake), like bash `history -d`:
 
-`history` and `search` take at most one word, plus options anywhere on
-the line. On its own `history` lists the last 10 lookups and `search`
-prints the usage (it needs a word). With two or more words the line is a
-question for the model (`hint history without duplicates`, `hint search
-for files containing foo`). An unknown option prints the usage, as does
-`hint help`.
-How many past questions mention postgres:
+```bash
+hint history --delete 41,42
+```
+
+What `hint history tunnel` prints:
+
+```text
+   12  2026-11-20 09:14  how do I create an ssh tunnel
+   57  2026-11-20 10:22  ssh tunnel to postgres
+```
+
+What `hint search tunnel` prints:
+
+```text
+ssh -N -L 5432:localhost:5432 db.example.org  # 57  2026-11-20 ssh tunnel to postgres (x2)
+```
+
+What `hint history --show 57` prints:
+
+```text
+   57  2026-11-20 10:22  ssh tunnel to postgres
+  ssh -N -L 5432:localhost:5432 db.example.org
+    # your history x1: tunnel to postgres
+    # from ~/.bash_history
+  ...
+```
+
+- **history** prints one line per lookup: its number, the time and the
+  question.
+- **search** prints one line per command that was printed, then the number,
+  date and question of the newest lookup that printed it, and how many did.
+  A command's note counts for matching; the "your history" and "your notes"
+  labels do not.
+- **--show** prints the whole answer, each of your rows followed by the
+  files it came from, so a row you don't want can be found and fixed in its
+  source (`grep -n` on the example in its status line).
+- **--delete** takes `N`, `N,M`, `N-M` or a mix. A deleted lookup's line is
+  blanked, so the others keep their numbers. If a listed number is not in
+  the log, nothing is deleted; a range deletes the lookups in it.
+
+Lists are oldest first, so the newest is just above your prompt. Matching
+is case-insensitive and on plain substrings. A lookup's number is its line
+in the log file, so deleting lines from the log by hand renumbers the ones
+after them.
+
+**Words and options.** `history` and `search` take at most one word, plus
+options anywhere on the line:
 
 ```bash
 hint history postgres --count
 ```
 
-For several words, or a number to search for, use `-H` / `-S`:
+With two or more words the line is a question for the model, so `hint
+history without duplicates` and `hint search for files containing foo` are
+asked as usual. `search` with no word, or any unknown option, prints the
+usage. For several words, or a number to search for, use `-H` / `-S`:
 
 ```bash
 hint -H --last 5 ssh key
@@ -190,32 +243,20 @@ hint -H --last 5 ssh key
 hint -S --count docker
 ```
 
-| Flag | Meaning |
+| Form or option | Meaning |
 |---|---|
 | `-H`, `--history [WORD...]` | past questions containing all WORDs (no words: every lookup) |
 | `-S`, `--search WORD...` | past commands containing all WORDs |
 | `-n`, `--last N` | only the last N matching lines (default 10) |
 | `-c`, `--count` | print the number of matching lines instead |
-| `-s`, `--show NUM` | the full answer of lookup NUM; `history` and `-H` only, on its own (no words, `-n` or `-c`) |
-| `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log; `history` and `-H` only, on its own |
+| `-s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
+| `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
 
-Options can go before or after the words. `-n` and `-c` work with all four
-forms; `--show` and `--delete` only with `history` and `-H`.
+`-n` and `-c` work after `history`, `search`, `-H` and `-S`. `--show` and
+`--delete` work only after `history` and `-H`, and on their own (no words,
+`-n` or `-c`).
 
-To keep lookups you didn't mean (a typo, a line that went to the model by
-mistake) out of `history` and `search`, delete them by number, like bash
-`history -d`:
-
-```bash
-hint history --delete 41,42
-```
-
-A deleted lookup's line is blanked, so the others keep their numbers. If a
-listed number is not in the log, nothing is deleted; a range (`41-45`)
-deletes the lookups in it. Deleting lines from the log by hand instead
-renumbers the ones after them.
-
-`hint help` alone prints the usage; `hint help me ...` is a question.
+**Help.** `hint help` prints the usage; `hint help me ...` is a question.
 
 ### hintdb commands
 
@@ -229,7 +270,8 @@ renumbers the ones after them.
 | `hintdb stats` | entries per kind and man page count, for checking dedup |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log [--printed] [-n N] [-c] [WORD...]` | past questions containing all WORDs; `--printed`: past commands (used by `hint history` / `hint search`) |
-| `hintdb log --show N` | the full entry N of the query log |
+| `hintdb log --show N` | the full entry N of the query log, with each row's source files |
+| `hintdb log --delete N[,N\|N-M]...` | delete entries from the query log (their numbers stay unused) |
 | `hintdb query [-n N] WORDS...` | `find`'s ranking for the words alone, with scores, then matching man pages (debugging; not used by `hint`) |
 
 Source kinds are detected from the file name. Use `--kind` to override, e.g. for
@@ -245,7 +287,8 @@ Every lookup appends one JSON line to `~/.local/share/hintdb/queries.jsonl`:
 the time, your question, the model's guesses, the lines printed (exactly as
 shown, also when nothing was printed) and the source files of each of your
 rows that was printed. Like your shell history, it stays on your machine
-and contains commands from your history. To turn it off:
+and contains commands from your history. `hint history` and `hint search`
+read it (see "Past lookups"). To turn it off:
 
 ```bash
 export HINTDB_LOG=/dev/null
@@ -473,6 +516,28 @@ Data flow from sources to the printed answer, traced with the example query
     # your history x2
   ...
   # see man ssh(1): OpenSSH remote login client
+
+
+ PAST LOOKUPS   $ hint history tunnel   /   $ hint search tunnel
+ ============================================================================
+
+  hint   history|search + at most one word + options -> hintdb log
+         (two or more words: a question, as above; no model call here)
+   |
+   v
+  hintdb log [--printed] [-n N] [-c] [-s N] [-d N,M-K] WORDS
+   |   read ~/.local/share/hintdb/queries.jsonl, number = line in the file
+   |   history   lookups whose question has every word
+   |               -> "   57  2026-11-20 10:22  ssh tunnel to postgres"
+   |   --printed lookups' command lines whose text or note has every word,
+   |   (search)  one line per command, newest lookup's number + question
+   |               -> "ssh -N -L 5432:... db.example.org  # 57  2026-11-20 ..."
+   |   -n N      only the last N (default 10), oldest first
+   |   -c        the number of lines instead
+   |   -s N      lookup N in full, "# from <file>" under each of your rows
+   |   -d N,M-K  blank those lines (numbers kept) under flock, as appends are
+   v
+  stdout; exit 1 when nothing matches
 
 
  DEBUG ONLY
