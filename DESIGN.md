@@ -420,8 +420,16 @@ other words, so the limitation stays (README).
   used and most useful aliases were `!` shell functions (`!f() { ...; };
   f`), which the recipe rule would drop and which are not commands to
   recall anyway. The note is the comment lines directly above the alias
-  (joined; a blank line ends them), then the body, then the value's own
-  trailing comment, so an alias is found by what it does. Git's quoting,
+  (joined; a blank line ends them), the `#---` section heading the alias is
+  under, then the body, then the value's own trailing comment, so an alias
+  is found by what it does. A heading is context for every alias under it
+  (as markdown headings are for notes), until the next heading or
+  `[section]`: taken as the first alias's doc it gave `default` the words
+  of `#--- fork/upstream workflow`; applied to all, "sync my fork with
+  upstream" moved `git sync` from 10th to 5th (2026-11-20; not taking it
+  at all: 9th). Weighing alias bodies lower was tried for that query and
+  dropped: without bodies `git sync` only went 10th -> 8th; the helpers
+  rank above it on their own comments. Git's quoting,
   `\` escapes and `\` continuations are decoded. All aliases are indexed,
   not only those in this machine's history: the file is shared with other
   machines, and recalling commands used elsewhere is the point. An alias

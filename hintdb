@@ -511,8 +511,9 @@ def extract_make(path):
 # Git aliases ([alias] in a git config file). The row is what you type,
 # `git <alias>`: a `!` alias is often a shell function, so its body is no
 # command to recall. The note is the comment lines directly above the alias
-# (a blank line ends them), then the body and the value's own trailing
-# comment, so the alias is found by what it does.
+# (a blank line ends them), the `#---` section heading it is under, then the
+# body and the value's own trailing comment, so the alias is found by what
+# it does.
 
 GIT_SECTION = re.compile(r'^\s*\[\s*([\w.-]+)(?:\s+"[^"]*")?\s*\]')
 GIT_KEY = re.compile(r"^\s*([A-Za-z][\w-]*)\s*=(.*)$")
@@ -547,6 +548,7 @@ def extract_gitconfig(path):
     section = None
     doc = []
     pending = None  # [name, value so far, doc] while a value continues
+    heading = ""
     for line in read_lines(path):
         if pending:
             val, cmt, more = git_value(line)
@@ -562,18 +564,22 @@ def extract_gitconfig(path):
             doc = []
             continue
         if s[0] in "#;":
-            doc.append(s.lstrip("#;").strip(" -=#"))
+            text = s.lstrip("#;").strip()
+            if text.startswith("---"):  # section heading: context for the aliases under it
+                heading, doc = text.strip(" -=#"), []
+            else:
+                doc.append(text.strip(" -=#"))
             continue
         m = GIT_SECTION.match(s)
         if m:
-            section, doc = m.group(1).lower(), []
+            section, doc, heading = m.group(1).lower(), [], ""
             continue
         m = GIT_KEY.match(s)
         if section != "alias" or not m:
             doc = []
             continue
         val, cmt, more = git_value(m.group(2).strip())
-        d = " ".join(x for x in doc if x)
+        d = join_notes(" ".join(x for x in doc if x), heading)
         doc = []
         if more:
             pending = [m.group(1), val, d]
@@ -648,7 +654,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "14"
+SCHEMA_VERSION = "15"
 
 
 def fingerprint(files):

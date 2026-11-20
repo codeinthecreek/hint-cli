@@ -3,7 +3,9 @@
 [alias]
     #--- repo status
     st = status -s
+    sto = status -uno
 
+    #--- fork/upstream workflow
     # sync default branch: fetch + ff-only merge
     # and push, safe to run any time
     sync = "!f() { D=$(git default); git switch $D && git fetch origin --prune; }; f"
@@ -13,3 +15,5 @@
     shout = "!echo \"done\""
 [color]
     ui = auto
+[alias]
+    co = checkout

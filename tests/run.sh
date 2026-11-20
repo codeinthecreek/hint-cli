@@ -235,17 +235,21 @@ if [ "$out" = "'make up'
 'sync'" ]; then ok "search: Makefile, justfile and git alias labels do not match"
 else bad "search: Makefile, justfile and git alias labels do not match" "$out"; fi
 
-has "git: .git_aliases found in a directory walk, only [alias] read" "$(rdb stats)" "git	5 entries"
+has "git: .git_aliases found in a directory walk, only [alias] read" "$(rdb stats)" "git	7 entries"
 lacks "git: other sections skipped" "$rec" "Example User"
-has "git: row is git <alias>, section comment as note, then the body" "$rec" \
+has "git: row is git <alias>, #--- heading as note, then the body" "$rec" \
   "git st	repo status; status -s"
+has "git: a #--- heading applies to every alias under it" "$rec" \
+  "git sto	repo status; status -uno"
+lacks "git: a heading ends at the next [section]" "$rec" "git co	fork"
+has "git: a second [alias] section is read too" "$rec" "git co	checkout"
 has "git: comment lines above joined, ! body as written, quotes removed" "$rec" \
-  "git sync	sync default branch: fetch + ff-only merge and push, safe to run any time; !f() { D=\$(git default); git switch \$D && git fetch origin --prune; }; f"
+  "git sync	sync default branch: fetch + ff-only merge and push, safe to run any time; fork/upstream workflow; !f() { D=\$(git default); git switch \$D && git fetch origin --prune; }; f"
 has "git: the value's trailing comment after the body" "$rec" \
-  "git lf	log --follow --; path/to/filename"
-has "git: \\ continues a value; a blank line ends a doc comment" "$rec" \
-  "git pretty	log --pretty=format:'%h %s' --date=short"
-has "git: escaped quotes in a value" "$rec" "git shout	!echo \"done\""
+  "git lf	fork/upstream workflow; log --follow --; path/to/filename"
+has "git: \\ continues a value" "$rec" \
+  "git pretty	fork/upstream workflow; log --pretty=format:'%h %s' --date=short"
+has "git: escaped quotes in a value" "$rec" "git shout	fork/upstream workflow; !echo \"done\""
 out=$(rdb find -q "sync the default branch" 2>&1)
 has "git: status label says your git aliases" "$out" \
   "  # your git aliases: sync default branch"

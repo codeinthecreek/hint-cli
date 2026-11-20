@@ -115,7 +115,8 @@ hintdb add ~/notes/kubernetes.md ~/src/myproject/justfile
 ```
 
 Git aliases are read from the `[alias]` section of a git config file. Each
-alias becomes a row `git <alias>`, found by its comment and body. Add the
+alias becomes a row `git <alias>`, found by its comment, its `#---`
+section heading and its body. Add the
 file that holds them (`[include]` is not followed, so if `~/.gitconfig`
 includes your aliases from another file, add that file instead):
 
