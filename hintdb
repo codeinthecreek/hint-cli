@@ -15,7 +15,8 @@ temp file that atomically replaces the DB, because dedup is global across source
                                                      (used by hint)
   hintdb query [-n N] [--no-update] WORDS...         find's ranking for the words
                                                      alone, with scores (debugging)
-  hintdb stats                                       row counts, for checking dedup
+  hintdb stats                                       row counts per kind and per
+                                                     source file, for checking dedup
   hintdb log [--printed] [-n N] [-c] [WORD...]       past questions containing all
                                                      WORDs (--printed: past commands)
   hintdb log --show N                                the full entry number N
@@ -1123,6 +1124,20 @@ def find(text, guesses, debug=False, rows=None):
         out.extend("#   " + g for g in guesses)
     return out
 
+def source_counts(con):
+    """[(source file, (entries, entries from no other source))], most first.
+    A command found in two sources is one entry listing both, so it counts
+    for each; "only from this source" is what removing the source drops."""
+    per = {}
+    for (srcs,) in con.execute("SELECT sources FROM entries"):
+        srcs = json.loads(srcs or "[]")
+        for p in srcs:
+            r = per.setdefault(p, [0, 0])
+            r[0] += 1
+            if len(srcs) == 1:
+                r[1] += 1
+    return sorted(((p, tuple(r)) for p, r in per.items()), key=lambda x: (-x[1][0], x[0]))
+
 # ---------------------------------------------------------------- query log
 
 
@@ -1388,11 +1403,14 @@ def main():
         for kind, c, s in con.execute(
                 "SELECT kind, COUNT(*), SUM(count) FROM entries GROUP BY kind"):
             print(f"{kind}\t{c} entries from {s} raw lines")
+        per = source_counts(con)
         con.close()
         if os.path.exists(MANDB):
             con = sqlite3.connect(MANDB)
             print(f"man\t{con.execute('SELECT COUNT(*) FROM pages').fetchone()[0]} pages")
             con.close()
+        for path, (n, own) in per:
+            print(f"{tilde(path)}\t{n} {'entry' if n == 1 else 'entries'}, {own} only from this source")
     elif args.op == "find":
         if not args.no_update:
             update()

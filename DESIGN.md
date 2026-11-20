@@ -412,7 +412,11 @@ other words, so the limitation stays (README).
   positional words matter (`docker exec -it ollama ollama list` / `... ps`,
   `mount -t cifs` / `-t nfs`, `git rev-parse --short HEAD` / `origin/main`).
 - **Source:** each row records the source files it came from, for the
-  "found in <source>" message.
+  "found in <source>" message, `--show`'s `# from` lines and `hintdb
+  stats`, which counts per file the entries and those from that file
+  only (what removing the source would drop). A first view of whether a
+  source earns its place; which sources' rows actually answer questions
+  needs the query log or the per-source eval.
 - **Notes:** a note belongs to the variant it came from. It appears on a merged
   row only when variants carrying it make up at least half the uses; otherwise
   it is shown only next to its own example. All notes stay searchable:

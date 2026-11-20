@@ -270,7 +270,7 @@ hint -S --count docker
 | `hintdb sources` | list registered sources |
 | `hintdb rebuild` | force a full rebuild |
 | `hintdb update` | rebuild only if something changed |
-| `hintdb stats` | entries per kind and man page count, for checking dedup |
+| `hintdb stats` | entries per kind, man page count, and entries per source file (and how many come from that file only) |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log [--printed] [-n N] [-c] [WORD...]` | past questions containing all WORDs; `--printed`: past commands (used by `hint history` / `hint search`) |
 | `hintdb log --show N` | the full entry N of the query log, with each row's source files |
@@ -389,10 +389,20 @@ How to read it:
 - **Your command is in the table but ranked low:** a scoring problem; the
   columns show which part is missing.
 
-To see what a source contributes after cleaning and dedup:
+To see what each source contributes after cleaning and dedup:
 
 ```bash
 hintdb stats
+```
+
+After the counts per kind and the man page count, it prints one line per
+source file: its entries, and how many of them come from that file only.
+The second number is what removing the source would drop; the rest are
+also in another source, often your history. For example:
+
+```text
+~/.bash_history	5210 entries, 4870 only from this source
+~/notes/kubernetes.md	140 entries, 122 only from this source
 ```
 
 ```bash
@@ -548,6 +558,7 @@ Data flow from sources to the printed answer, traced with the example query
   hintdb query WORDS   find's ranking for the words alone (no model guesses),
                        with scores, then matching man NAME lines; not used
                        by hint
-  hintdb stats         rows per kind, man page count
+  hintdb stats         rows per kind, man page count, rows per source file
+                       (and how many from that file only)
 ```
 
