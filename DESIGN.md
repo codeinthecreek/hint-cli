@@ -391,11 +391,11 @@ other words, so the limitation stays (README).
 ## Index
 
 - **Sources:** bash history, markdown and text notes, justfiles, Makefiles,
-  git aliases. Man NAME lines (sections 1 and 8, from `apropos .`) go into a
+  git and bash aliases. Man NAME lines (sections 1 and 8, from `apropos .`) go into a
   separate `man.db`. Direction agreed 2026-11-18: notes only when targeted
   (such as a Kubernetes cheatsheet), not folders of old notes from another
-  platform; add recipe files (done), git aliases (done), then bash aliases,
-  then shell scripts. On the eval sets notes supply 5 benchmark answers;
+  platform; add recipe files, git aliases and bash aliases (done), then
+  shell scripts. On the eval sets notes supply 5 benchmark answers;
   without them benchmark not shown goes 14 -> 16, the rest unchanged.
 - **Recipe files** (justfiles, Makefiles; agreed 2026-11-20): a recipe line
   ending in `\` is joined with the lines it continues on; the recipe
@@ -434,9 +434,23 @@ other words, so the limitation stays (README).
   not only those in this machine's history: the file is shared with other
   machines, and recalling commands used elsewhere is the point. An alias
   also in history merges with that row, so its uses still count.
-- **Labels:** a row from a recipe file or git aliases is labelled "your
-  Makefile", "your justfile" or "your git aliases" instead of "your notes";
-  history comes first when a row is in both.
+- **Bash aliases** (agreed 2026-11-20): `alias name='body'` lines in
+  `.bash_aliases` or `.bashrc`, also inside if-blocks or after `[ -x ... ]
+  &&`. As for git aliases the row is the alias name, what you type. The
+  note is the comment lines above the block the alias is in (a blank line
+  ends a block, so "# safety aliases" covers rm, mv and cp; bash alias
+  files group by blank lines rather than `#---` headings), then the body
+  and the line's trailing comment. A comment with no space after the `#`
+  (`#alias x=...`, `#if ...`) is commented-out code, not a comment. An
+  alias whose body starts with its own name (`ls='ls --color=auto'`,
+  `rm='rm -i'`) is skipped: it only adds options, nothing to recall. Alias
+  names count as installed, like commands on PATH, both when building
+  (a one-off history line `histgrep ssh` is kept) and at lookup (an alias
+  also typed in history merges into a history row, which must still be
+  shown). They are stored with the index.
+- **Labels:** a row from a recipe file or aliases is labelled "your
+  Makefile", "your justfile", "your git aliases" or "your aliases" instead
+  of "your notes"; history comes first when a row is in both.
 - **Cleaning:** drop trivial commands (unless annotated), lines that look like
   secrets, `hint`/`hintdb` lines plus `HINTDB_IGNORE`, and one-off history
   lines whose command is not on PATH.
