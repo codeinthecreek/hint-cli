@@ -172,6 +172,35 @@ line "stats per source: most entries first" "$out" 4 "$fix/history	31 entries, 3
 has "stats per source: home shown as ~" "$(HOME="$root" hintdb stats)" \
   "~/tests/fixtures/history	31 entries"
 
+echo "== recipe files (Makefiles, justfiles)"
+# A separate index, so the counts above stay as they are.
+: > "$tmp/empty_history"
+out=$(HINTDB_DB="$tmp/recipes.db" HINTDB_SOURCES="$tmp/recipes_sources" \
+  HISTFILE="$tmp/empty_history" hintdb add "$fix/recipes" 2>&1)
+has "recipes: directory walk finds Makefile, *.mk and justfile" "$out" "entries"
+rec=$(python3 - "$tmp/recipes.db" <<'EOF'
+import sqlite3, sys
+for display, dnote in sqlite3.connect(sys.argv[1]).execute(
+        "SELECT display, dnote FROM entries"):
+    print(f"{display}\t{dnote}")
+EOF
+)
+has "make: \\ lines joined, @ stripped, ## doc on the target line" "$rec" \
+  "docker run -d --restart=always --name registry -p 5000:5000 registry:2	make registry; start the local registry"
+lacks "make: a section divider is not the next recipe's note" "$rec" "Cluster"
+has "make: comment above the target as doc, - stripped, \$\$ -> \$" "$rec" \
+  "docker network inspect kind --format \"\$X\"	make net; create the cluster network"
+lacks "make: if-block joined and dropped whole" "$rec" "docker network create"
+lacks "make: no shell fragments" "$rec" "fi	"
+has "make: \$(VAR) kept, trailing comment as note" "$rec" \
+  "kubectl --context kind-\$(CLUSTER) get nodes -o wide	make nodes; all of them"
+lacks "make: && chain dropped" "$rec" "kubectl get pods"
+lacks "make: pattern rules skipped" "$rec" "cc -c"
+has "make: *.mk detected" "$rec" "shellcheck --severity=warning *.sh	make lint"
+has "just: \\ lines joined, continuation keeps its dashes" "$rec" \
+  "docker compose up -d --remove-orphans	just up"
+lacks "just: for loop dropped" "$rec" "kubectl apply"
+
 echo "== query (keyword search, debugging only)"
 out=$(hintdb query DNS lookup)
 has "man NAME lines matching the words are listed" "$out" "man    dig(1): DNS lookup utility"

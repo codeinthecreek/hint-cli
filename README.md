@@ -67,7 +67,8 @@ The index (`hint.db`) is built from your sources:
   use count, a template (`ssh -L <N>:localhost:<N> <HOST>`) and two real
   examples. Flags are kept as written; only values are replaced.
 - **Notes.** Trailing `# comments` in history, markdown headings and comments,
-  and justfile recipe names and doc comments become searchable notes. A note
+  and justfile and Makefile recipe names and doc comments become searchable
+  notes. A note
   is shown on a merged row only if at least half of its uses carry it;
   otherwise it stays with its own example.
 - **Man pages.** The NAME lines of installed section 1 and 8 pages (from
@@ -107,8 +108,8 @@ ollama pull qwen2.5-coder:3b
 ```
 
 On first use, `hintdb` registers `$HISTFILE` (or `~/.bash_history`) as a source.
-Add the notes files and justfiles you keep for work on this machine, such as a
-cheatsheet or a project's justfile:
+Add the notes files, justfiles and Makefiles you keep for work on this
+machine, such as a cheatsheet or a project's justfile:
 
 ```bash
 hintdb add ~/notes/kubernetes.md ~/src/myproject/justfile
@@ -116,8 +117,8 @@ hintdb add ~/notes/kubernetes.md ~/src/myproject/justfile
 
 Register files rather than whole folders of old notes: commands for tools or
 platforms you no longer use come back as noise. (A directory is walked for
-`*.md`, `*.markdown`, `*.txt`, `justfile` and `*.just`, skipping hidden
-directories.)
+`*.md`, `*.markdown`, `*.txt`, `justfile`, `*.just`, `Makefile`, `makefile`,
+`GNUmakefile` and `*.mk`, skipping hidden directories.)
 
 For commands from the current shell session to be indexed, the shell has to
 write its history out after each command (a script can't do this for the calling
@@ -265,7 +266,7 @@ hint -S --count docker
 
 | Command | Purpose |
 |---|---|
-| `hintdb add PATH... [--kind history\|md\|text\|just]` | register sources and rebuild |
+| `hintdb add PATH... [--kind history\|md\|text\|just\|make]` | register sources and rebuild |
 | `hintdb remove PATH...` | unregister sources and rebuild |
 | `hintdb sources` | list registered sources |
 | `hintdb rebuild` | force a full rebuild |
@@ -431,9 +432,11 @@ Data flow from sources to the printed answer, traced with the example query
   ~/.bash_history ---+
   notes *.md *.txt --+   extract
   justfiles ---------+   - history: one line each, trailing "# note"
-          |              - md: shell fences + "$ " lines; note = heading,
+  Makefiles ---------+   - md: shell fences + "$ " lines; note = heading,
           |                prose line, "# comment" above
-          |              - just: recipe lines; note = "just <recipe>" + doc
+          |              - just, make: recipe lines, "\" lines joined, only
+          |                single commands (no if/for, ; && ||);
+          |                note = "just|make <recipe>" + doc
           v
   clean   drop: trivial (ls, cd, vim file ...) unless noted
                 secrets (token, password, keys ...)

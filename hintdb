@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """hintdb - cleaned, deduplicated command index for `hint` (SQLite FTS5, stdlib only).
 
-Sources (bash history, markdown/text notes, justfiles; files or directories) are
-listed in ~/.config/hintdb/sources. Every ingest is a full clean rebuild into a
-temp file that atomically replaces the DB, because dedup is global across sources.
+Sources (bash history, markdown/text notes, justfiles, Makefiles; files or
+directories) are listed in ~/.config/hintdb/sources. Every ingest is a full
+clean rebuild into a temp file that atomically replaces the DB, because dedup
+is global across sources.
 `find` and `query` rebuild automatically when any source file changed (mtime/size).
 
-  hintdb add PATH... [--kind history|md|text|just]   register sources, rebuild
+  hintdb add PATH... [--kind history|md|text|just|make]
+                                                     register sources, rebuild
   hintdb remove PATH...                              unregister sources, rebuild
   hintdb sources                                     list registered sources
   hintdb rebuild                                     force a clean ingest
@@ -52,9 +54,11 @@ DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
 LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
 
-KINDS = ("history", "md", "text", "just")
-NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just"}
+KINDS = ("history", "md", "text", "just", "make")
+NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just",
+            ".mk": "make"}
 JUST_NAMES = {"justfile", ".justfile"}
+MAKE_NAMES = {"makefile", "gnumakefile"}
 
 # ---------------------------------------------------------------- cleaning rules
 
@@ -396,41 +400,113 @@ def extract_text(path):
             ctx = s.lstrip("#").strip()[:200]
 
 
-RECIPE = re.compile(r"^@?([A-Za-z_][\w-]*)(?:\s[^:]*)?:(?!=)")
+# Recipe files (justfiles, Makefiles). A recipe body line ending in `\`
+# continues on the next line; the pieces are joined into one command, then
+# the recipe prefixes (@ - +) are stripped once, from its start. Only single
+# simple commands are kept: a joined line starting with a shell keyword or
+# containing an unquoted ; && || (if-blocks, loops, chains) is dropped whole.
+# The doc comment is the comment line directly above the recipe (a blank line
+# in between ends it, so section dividers are not taken); in a Makefile a
+# `## doc` on the target line comes first.
+
+JUST_RECIPE = re.compile(r"^@?([A-Za-z_][\w-]*)(?:\s[^:]*)?:(?!=)")
+# `name [name...]:` or `name::`, not `X := y`, `X ::= y`, `.PHONY:`, `%.o:`.
+MAKE_TARGET = re.compile(r"^(?!\.)([\w/.-]+)(?:\s+[\w/.-]+)*\s*::?(?![=:])")
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "for", "while", "until",
+                  "do", "done", "case", "esac", "select", "function", "[[", "!"}
+
+
+def simple_command(cmd):
+    """One command: not a shell keyword first, no unquoted ; && ||."""
+    words = cmd.split()
+    if not words or words[0] in SHELL_KEYWORDS or words[0][0] in "({":
+        return False
+    sq = dq = esc = False
+    for i, ch in enumerate(cmd):
+        if esc:
+            esc = False
+        elif ch == "\\" and not sq:
+            esc = True
+        elif ch == "'" and not dq:
+            sq = not sq
+        elif ch == '"' and not sq:
+            dq = not dq
+        elif not sq and not dq and (ch == ";" or cmd.startswith(("&&", "||"), i)):
+            return False
+    return True
+
+
+def recipe_commands(body, make):
+    """A recipe's body lines -> (cmd, trailing note) for its simple commands."""
+    buf = ""
+    for s in body:
+        if not buf and s.startswith("#"):  # shebang or comment inside a recipe
+            continue
+        if s.endswith("\\") and not s.endswith("\\\\"):
+            buf += s[:-1].strip() + " "
+            continue
+        line = (buf + s).strip()
+        buf = ""
+        line = line.lstrip("@-+" if make else "@-").strip()
+        if make:
+            line = line.replace("$$", "$")
+        cmd, note = split_comment(line)
+        if cmd and simple_command(cmd):
+            yield cmd, note
+
+
+def extract_recipes(path, make):
+    """Recipe body commands; note = `just|make <recipe>` + doc comment."""
+    tool = "make" if make else "just"
+    recipe = None
+    body = []
+    doc = comment = ""
+
+    def flush():
+        for cmd, note in recipe_commands(body, make):
+            yield cmd, join_notes(f"{tool} {recipe}", doc, note)
+
+    for line in read_lines(path):
+        if not line.strip():
+            comment = ""
+            continue
+        if recipe is not None and (line[:1] == "\t" or (not make and line[:1] == " ")):
+            body.append(line.strip())
+            continue
+        s = line.strip()
+        if s.startswith("#"):  # does not end a recipe; may be the next one's doc
+            comment = s.lstrip("#").strip()
+            continue
+        if recipe is not None:
+            yield from flush()
+            recipe, body = None, []
+        if s.startswith("["):  # just recipe attributes like [private]
+            continue
+        if make:
+            head, tail = split_comment(s)
+            m = MAKE_TARGET.match(head)
+            if m:
+                recipe, doc = m.group(1), tail.lstrip("#").strip() or comment
+        else:
+            m = JUST_RECIPE.match(line)
+            if m:
+                recipe, doc = m.group(1), comment
+        comment = ""
+    if recipe is not None:
+        yield from flush()
 
 
 def extract_just(path):
-    """Recipe body lines; note = `just <recipe>` + doc comment above the recipe."""
-    recipe = None
-    doc = comment = ""
-    for line in read_lines(path):
-        if not line.strip():
-            continue
-        if line[:1] in " \t":
-            if recipe is None:
-                continue
-            s = line.strip()
-            if s.startswith("#"):  # shebang or comment inside a recipe
-                continue
-            cmd, note = split_comment(s.lstrip("@-").strip())
-            if cmd:
-                yield cmd, join_notes("just " + recipe, doc, note)
-            continue
-        s = line.strip()
-        if s.startswith("#"):
-            comment = s.lstrip("#").strip()
-            continue
-        if s.startswith("["):  # recipe attributes like [private]
-            continue
-        m = RECIPE.match(line)
-        if m:
-            recipe, doc, comment = m.group(1), comment, ""
-        else:
-            recipe, comment = None, ""
+    return extract_recipes(path, make=False)
+
+
+def extract_make(path):
+    return extract_recipes(path, make=True)
 
 
 EXTRACT = {"history": extract_history, "md": extract_markdown,
-           "text": extract_text, "just": extract_just}
+           "text": extract_text, "just": extract_just,
+           "make": extract_make}
 
 # ---------------------------------------------------------------- sources
 
@@ -439,6 +515,8 @@ def detect_kind(path):
     base = os.path.basename(path)
     if base.lower() in JUST_NAMES:
         return "just"
+    if base.lower() in MAKE_NAMES:
+        return "make"
     ext = os.path.splitext(base)[1].lower()
     if ext in NOTE_EXT:
         return NOTE_EXT[ext]
@@ -464,7 +542,7 @@ def load_sources():
 def save_sources(srcs):
     os.makedirs(os.path.dirname(SOURCES), exist_ok=True)
     with open(SOURCES, "w") as f:
-        f.write("# kind<TAB>path   kind: history|md|text|just|auto (auto = detect per file)\n")
+        f.write("# kind<TAB>path   kind: history|md|text|just|make|auto (auto = detect per file)\n")
         for kind, path in srcs:
             f.write(f"{kind}\t{path}\n")
 
@@ -491,7 +569,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "11"
+SCHEMA_VERSION = "12"
 
 
 def fingerprint(files):
