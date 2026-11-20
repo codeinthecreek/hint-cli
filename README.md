@@ -272,6 +272,7 @@ hint -S --count docker
 | `hintdb rebuild` | force a full rebuild |
 | `hintdb update` | rebuild only if something changed |
 | `hintdb stats` | entries per kind, man page count, and entries per source file (and how many come from that file only) |
+| `hintdb stats --source PATH` | the entries from one source file (or from the files under a directory), most uses first |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log [--printed] [-n N] [-c] [WORD...]` | past questions containing all WORDs; `--printed`: past commands (used by `hint history` / `hint search`) |
 | `hintdb log --show N` | the full entry N of the query log, with each row's source files |
@@ -404,6 +405,14 @@ also in another source, often your history. For example:
 ```text
 ~/.bash_history	5210 entries, 4870 only from this source
 ~/notes/kubernetes.md	140 entries, 122 only from this source
+```
+
+To see the entries themselves, one per line with use count and note (and
+the other sources, for an entry not only from this one), pass the file or a
+directory of sources:
+
+```bash
+hintdb stats --source ~/src/myproject/Makefile
 ```
 
 ```bash

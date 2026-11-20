@@ -172,6 +172,17 @@ line "stats per source: most entries first" "$out" 4 "$fix/history	31 entries, 3
 has "stats per source: home shown as ~" "$(HOME="$root" hintdb stats)" \
   "~/tests/fixtures/history	31 entries"
 
+out=$(HOME=/nonexistent hintdb stats --source "$fix/notes/k8s.md")
+line "stats --source: most uses first, other sources named" "$out" 1 \
+  "kubectl get nodes  [x2]  # Cordon and drain; Mark node unschedulable then evict pods.; also in $fix/history"
+if [ "$(wc -l <<<"$out")" = 3 ]; then ok "stats --source: one line per entry from the file"
+else bad "stats --source: one line per entry from the file" "$out"; fi
+out=$(hintdb stats --source "$fix/notes")
+has "stats --source: a directory lists its files' entries" "$out" "terraform destroy -auto-approve  [x1]  # just rebuild"
+out=$(hintdb stats --source "$fix/nonexistent" 2>&1)
+status "stats --source: unknown source fails" 1 $?
+has "stats --source: unknown source says so" "$out" "no entries from"
+
 echo "== recipe files (Makefiles, justfiles)"
 # A separate index, so the counts above stay as they are.
 : > "$tmp/empty_history"

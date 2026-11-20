@@ -19,6 +19,8 @@ is global across sources.
                                                      alone, with scores (debugging)
   hintdb stats                                       row counts per kind and per
                                                      source file, for checking dedup
+  hintdb stats --source PATH                         the entries from one source
+                                                     file (or a directory's files)
   hintdb log [--printed] [-n N] [-c] [WORD...]       past questions containing all
                                                      WORDs (--printed: past commands)
   hintdb log --show N                                the full entry number N
@@ -1216,6 +1218,24 @@ def source_counts(con):
                 r[1] += 1
     return sorted(((p, tuple(r)) for p, r in per.items()), key=lambda x: (-x[1][0], x[0]))
 
+
+def source_entries(con, path):
+    """One line per entry from the source file PATH (or any file under the
+    directory PATH), most uses first: `display  [xN]  # note`, plus the other
+    sources for an entry that is not only from this one."""
+    path = os.path.abspath(os.path.expanduser(path))
+    mine = lambda p: p == path or p.startswith(path.rstrip("/") + "/")
+    rows = []
+    for display, dnote, count, srcs in con.execute(
+            "SELECT display, dnote, count, sources FROM entries"):
+        srcs = json.loads(srcs or "[]")
+        if not any(mine(os.path.abspath(p)) for p in srcs):
+            continue
+        other = [tilde(p) for p in srcs if not mine(os.path.abspath(p))]
+        note = "; ".join(x for x in (dnote, other and "also in " + ", ".join(other)) if x)
+        rows.append((-count, display, f"{display}  [x{count}]" + (f"  # {note}" if note else "")))
+    return [r[2] for r in sorted(rows)]
+
 # ---------------------------------------------------------------- query log
 
 
@@ -1433,7 +1453,8 @@ def main():
     sub.add_parser("sources")
     sub.add_parser("rebuild")
     sub.add_parser("update")
-    sub.add_parser("stats")
+    a = sub.add_parser("stats")
+    a.add_argument("--source", metavar="PATH")
     fd = sub.add_parser("find")
     fd.add_argument("-q", "--query", required=True, help="the question, in the user's words")
     fd.add_argument("--no-update", action="store_true")
@@ -1475,6 +1496,16 @@ def main():
         report(update(force=True))
     elif args.op == "update":
         report(update())
+    elif args.op == "stats" and args.source:
+        update()
+        con = sqlite3.connect(DB)
+        lines = source_entries(con, args.source)
+        con.close()
+        if not lines:
+            sys.exit(f"hintdb: no entries from {args.source} "
+                     "(see `hintdb stats` for the source files)")
+        for line in lines:
+            print(line)
     elif args.op == "stats":
         update()
         con = sqlite3.connect(DB)
