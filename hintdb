@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """hintdb - cleaned, deduplicated command index for `hint` (SQLite FTS5, stdlib only).
 
-Sources (bash history, markdown/text notes, justfiles, Makefiles; files or
-directories) are listed in ~/.config/hintdb/sources. Every ingest is a full
-clean rebuild into a temp file that atomically replaces the DB, because dedup
-is global across sources.
+Sources (bash history, markdown/text notes, justfiles, Makefiles, git
+aliases; files or directories) are listed in ~/.config/hintdb/sources. Every
+ingest is a full clean rebuild into a temp file that atomically replaces the
+DB, because dedup is global across sources.
 `find` and `query` rebuild automatically when any source file changed (mtime/size).
 
-  hintdb add PATH... [--kind history|md|text|just|make]
+  hintdb add PATH... [--kind history|md|text|just|make|git]
                                                      register sources, rebuild
   hintdb remove PATH...                              unregister sources, rebuild
   hintdb sources                                     list registered sources
@@ -56,11 +56,12 @@ DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
 LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
 
-KINDS = ("history", "md", "text", "just", "make")
+KINDS = ("history", "md", "text", "just", "make", "git")
 NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just",
             ".mk": "make"}
 JUST_NAMES = {"justfile", ".justfile"}
 MAKE_NAMES = {"makefile", "gnumakefile"}
+GIT_NAMES = {".gitconfig", ".git_aliases"}
 
 # ---------------------------------------------------------------- cleaning rules
 
@@ -507,9 +508,88 @@ def extract_make(path):
     return extract_recipes(path, make=True)
 
 
+# Git aliases ([alias] in a git config file). The row is what you type,
+# `git <alias>`: a `!` alias is often a shell function, so its body is no
+# command to recall. The note is the comment lines directly above the alias
+# (a blank line ends them), the `#---` section heading it is under, then the
+# body and the value's own trailing comment, so the alias is found by what
+# it does.
+
+GIT_SECTION = re.compile(r'^\s*\[\s*([\w.-]+)(?:\s+"[^"]*")?\s*\]')
+GIT_KEY = re.compile(r"^\s*([A-Za-z][\w-]*)\s*=(.*)$")
+GIT_ESC = {"n": "\n", "t": "\t", "b": "\b", '"': '"', "\\": "\\"}
+
+
+def git_value(raw):
+    """A git config value -> (value, trailing comment, continues). Quotes
+    are removed, \\-escapes decoded; # or ; outside quotes starts a comment;
+    a \\ at the end continues the value on the next line."""
+    out, q, i = [], False, 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch == "\\":
+            if i + 1 == len(raw):
+                return "".join(out), "", True
+            out.append(GIT_ESC.get(raw[i + 1], raw[i + 1]))
+            i += 2
+            continue
+        if ch == '"':
+            q = not q
+        elif ch in "#;" and not q:
+            return "".join(out).strip(), raw[i + 1:].strip(), False
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out).strip(), "", False
+
+
+def extract_gitconfig(path):
+    """`git <alias>` for each alias; note = comments above + body."""
+    section = None
+    doc = []
+    pending = None  # [name, value so far, doc] while a value continues
+    heading = ""
+    for line in read_lines(path):
+        if pending:
+            val, cmt, more = git_value(line)
+            pending[1] += val
+            if more:
+                continue
+            name, body, d = pending
+            pending = None
+            yield f"git {name}", join_notes(d, " ".join(body.split()), cmt)
+            continue
+        s = line.strip()
+        if not s:
+            doc = []
+            continue
+        if s[0] in "#;":
+            text = s.lstrip("#;").strip()
+            if text.startswith("---"):  # section heading: context for the aliases under it
+                heading, doc = text.strip(" -=#"), []
+            else:
+                doc.append(text.strip(" -=#"))
+            continue
+        m = GIT_SECTION.match(s)
+        if m:
+            section, doc, heading = m.group(1).lower(), [], ""
+            continue
+        m = GIT_KEY.match(s)
+        if section != "alias" or not m:
+            doc = []
+            continue
+        val, cmt, more = git_value(m.group(2).strip())
+        d = join_notes(" ".join(x for x in doc if x), heading)
+        doc = []
+        if more:
+            pending = [m.group(1), val, d]
+            continue
+        yield f"git {m.group(1)}", join_notes(d, " ".join(val.split()), cmt)
+
+
 EXTRACT = {"history": extract_history, "md": extract_markdown,
            "text": extract_text, "just": extract_just,
-           "make": extract_make}
+           "make": extract_make, "git": extract_gitconfig}
 
 # ---------------------------------------------------------------- sources
 
@@ -520,6 +600,8 @@ def detect_kind(path):
         return "just"
     if base.lower() in MAKE_NAMES:
         return "make"
+    if base.lower() in GIT_NAMES or path.endswith(os.sep + os.path.join("git", "config")):
+        return "git"
     ext = os.path.splitext(base)[1].lower()
     if ext in NOTE_EXT:
         return NOTE_EXT[ext]
@@ -545,7 +627,7 @@ def load_sources():
 def save_sources(srcs):
     os.makedirs(os.path.dirname(SOURCES), exist_ok=True)
     with open(SOURCES, "w") as f:
-        f.write("# kind<TAB>path   kind: history|md|text|just|make|auto (auto = detect per file)\n")
+        f.write("# kind<TAB>path   kind: history|md|text|just|make|git|auto (auto = detect per file)\n")
         for kind, path in srcs:
             f.write(f"{kind}\t{path}\n")
 
@@ -572,7 +654,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "13"
+SCHEMA_VERSION = "15"
 
 
 def fingerprint(files):
@@ -648,8 +730,9 @@ def build(files):
         # Templated rows show real examples (most recent first); plain rows
         # show up to 2 other variants.
         examples = [best] + by_count[:1] if display != best else by_count[:2]
-        # The status label's kind: history first, then a recipe file, then notes.
-        kind = next((k for k in ("history", "make", "just") if k in g["kinds"]), "note")
+        # The status label's kind: history first, then a recipe file or git
+        # aliases, then notes.
+        kind = next((k for k in ("history", "make", "just", "git") if k in g["kinds"]), "note")
         prog, args, data = split_cmd(best)
         cmdword = os.path.basename(prog.split()[0]) if prog else ""
         vnotes = g["vnotes"]
@@ -1303,8 +1386,8 @@ def log_history(words):
             for r in read_log() if has_words(r["query"], words)]
 
 
-SOURCE_LABEL = {"make": "your Makefile", "just": "your justfile"}
-STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your (?:notes|Makefile|justfile))(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
+SOURCE_LABEL = {"make": "your Makefile", "just": "your justfile", "git": "your git aliases"}
+STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your (?:notes|Makefile|justfile|git aliases))(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
 
 
 def status_note(line):

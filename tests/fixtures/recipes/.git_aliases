@@ -1,0 +1,19 @@
+[user]
+    name = Example User
+[alias]
+    #--- repo status
+    st = status -s
+    sto = status -uno
+
+    #--- fork/upstream workflow
+    # sync default branch: fetch + ff-only merge
+    # and push, safe to run any time
+    sync = "!f() { D=$(git default); git switch $D && git fetch origin --prune; }; f"
+    lf = log --follow -- # path/to/filename
+    pretty = log --pretty=format:'%h %s' \
+        --date=short
+    shout = "!echo \"done\""
+[color]
+    ui = auto
+[alias]
+    co = checkout
