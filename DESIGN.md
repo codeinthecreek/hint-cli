@@ -328,6 +328,19 @@ hold-out 79, questions 12).
   a second model, and 273 s to embed the index.
 - **The model's command as a grep key** (its tool and flags): finds mostly
   the rows find already finds.
+- **A stronger model** (Claude Haiku 5.5 through the Anthropic API instead
+  of qwen2.5-coder:3b, 2026-11-20; same prompt, worked example and
+  cleaning, same index snapshot; exact / useful first / not shown):
+  benchmark 37 / 57 / 9 -> 35 / 57 / 8, hold-out 24 / 50 / 17 -> 24 / 49 /
+  18, questions 7 / 9 / 0 -> 8 / 10 / 0. No gain, though the guesses read
+  better (fewer junk lines on the user's own questions, 6 -> 3). The misses
+  are not a weak model's: in every hold-out miss (17 of 17, and 18 of 18
+  with Haiku) the wrong tool was guessed because the question does not
+  name the tool and the user used a less common one than the obvious
+  guess. No model can know that; only the user's words in the index can
+  (a `# comment` on the command, or naming the tool in the question). An
+  API model would only help on a machine without Ollama, at about $0.00005
+  and 0.9 s per lookup; not built.
 - **Tool-only fallback** (rows of the guessed tool when no row has a query
   word): hold-out not shown 20 -> 18, otherwise unchanged; not taken up.
 - **Culling rows** that match nothing but the tool: almost no change
@@ -391,11 +404,16 @@ other words, so the limitation stays (README).
 ## Index
 
 - **Sources:** bash history, markdown and text notes, justfiles, Makefiles,
-  git and bash aliases. Man NAME lines (sections 1 and 8, from `apropos .`) go into a
-  separate `man.db`. Direction agreed 2026-11-18: notes only when targeted
-  (such as a Kubernetes cheatsheet), not folders of old notes from another
-  platform; add recipe files, git aliases and bash aliases (done), then
-  shell scripts. On the eval sets notes supply 5 benchmark answers;
+  git and bash aliases. Man NAME lines (sections 1 and 8, from `apropos .`)
+  go into a separate `man.db`. Direction agreed 2026-11-18: notes only when
+  targeted (such as a Kubernetes cheatsheet), not folders of old notes from
+  another platform; add recipe files, git aliases and bash aliases (done).
+  Shell scripts are parked (2026-11-20): a script's lines are mostly
+  plumbing (variables, tests, loops, echo), repo scripts are written for
+  their project, and scripts on PATH are already in history when run. If
+  a real lookup misses something in a script, the cheap form is the one
+  used for aliases: the row is the script name, the note its header
+  comments, for registered scripts only. On the eval sets notes supply 5 benchmark answers;
   without them benchmark not shown goes 14 -> 16, the rest unchanged.
 - **Recipe files** (justfiles, Makefiles; agreed 2026-11-20): a recipe line
   ending in `\` is joined with the lines it continues on; the recipe
@@ -405,8 +423,8 @@ other words, so the limitation stays (README).
   that starts with a shell keyword (if, for, while, ...) or has an
   unquoted `;`, `&&` or `||` is dropped whole, not split (a real Makefile
   tested 2026-11-18 gave 86 rows, ~60 of them shell fragments like `fi`).
-  Splitting such lines into their commands was the other option; left for
-  shell scripts, where it is needed. `echo` lines are dropped too: progress
+  Splitting such lines into their commands was the other option; not
+  needed so far (shell scripts, its main use, are parked). `echo` lines are dropped too: progress
   messages, and merged with history echoes they made a top row (`echo
   <STR> x11`, 2026-11-20). The note is `just|make <recipe>` plus the doc: a
   `## doc` on a Makefile target line, else the comment line directly above

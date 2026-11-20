@@ -363,6 +363,11 @@ To measure hint on your own queries with a real model, see
   not printed again, and the next guess (possibly another tool) is the one
   that can lead.
 - Bash history without timestamps gives only rough recency (line order).
+- A question that doesn't name the tool finds your command only through its
+  words (the command itself, a `# comment`, a note). If you used a less
+  common tool than the one the model guesses, and none of the question's
+  words are on your command, it isn't found; a better model doesn't change
+  that.
 
 ## Debugging a lookup
 
@@ -403,8 +408,13 @@ buildhost`, so only the best of them is shown and the list ends at 4 rows.
 
 How to read it:
 
-- **Wrong tool in the guesses:** a model or prompt problem. Try a larger model,
-  e.g. `HINT_MODEL=qwen2.5-coder:7b`.
+- **Wrong tool in the guesses:** usually the question doesn't name the tool
+  and you used a less common one than the obvious guess. A larger model
+  rarely helps there (one was tried: no gain on the eval sets), since no
+  model can know which tool you chose. Name the tool in the question, or put
+  a `# comment` on the command in your history so its words match. A larger
+  model (`HINT_MODEL=qwen2.5-coder:7b`) helps only when the guesses are
+  plainly wrong for the question.
 - **Your command is missing from the table:** none of the question's words
   are in it (or only in its paths and values, which are searched only when
   the question mentions a path), and the model guessed another tool. A
