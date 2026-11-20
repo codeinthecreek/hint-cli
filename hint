@@ -41,7 +41,8 @@ OPTIONS, anywhere after history, search, -H or -S:
   -c, --count      print the number of matching lines instead
 After history or -H only, and on its own (no WORD, -n or -c):
   -s, --show NUM   the full answer of entry NUM (the number that
-                   history and search print)
+                   history and search print), with each of your rows'
+                   source files
   -d, --delete NUM[,NUM|NUM-NUM]...
                    delete entries from the log; the others keep their
                    numbers, and nothing is deleted if a NUM is not there

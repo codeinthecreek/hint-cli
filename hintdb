@@ -1282,12 +1282,39 @@ def log_delete(spec):
     return [entries[n] for n in sorted(todo)], None
 
 
+def tilde(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
+
+
 def log_show(n):
-    """The full entry with line number n: header, then the printed lines."""
+    """The full entry with line number n: header, then the printed lines,
+    each of the user's rows followed by `# from <source files>` (from the
+    log's rows), so the line can be found and fixed in its source."""
     for r in read_log():
-        if r["n"] == n:
-            lines = ["%5d  %s  %s" % (n, log_time(r), r["query"])]
-            return lines + (["  " + x for x in printed_of(r)] or ["  (nothing found)"])
+        if r["n"] != n:
+            continue
+        src = {}
+        for row in r.get("rows") or []:
+            if isinstance(row, dict) and isinstance(row.get("line"), str):
+                src.setdefault(row["line"], [str(p) for p in row.get("sources") or []])
+        printed = printed_of(r)
+        out = ["%5d  %s  %s" % (n, log_time(r), r["query"])]
+        for i, x in enumerate(printed):
+            out.append("  " + x)
+            if x.startswith("#   "):          # a "not installed" row
+                cmd, indent = x[4:], "#     "
+            elif x[:1] not in ("#", " ", ""):  # a command line
+                cmd, indent = x, "  # "
+                if i + 1 < len(printed) and printed[i + 1].startswith("  #"):
+                    continue                   # added after its status line
+            elif x.startswith("  #") and i > 0 and printed[i - 1][:1] not in ("#", " ", ""):
+                cmd, indent = printed[i - 1], "  # "
+            else:
+                continue
+            if src.get(cmd):
+                out.append("  " + indent + "from " + ", ".join(tilde(p) for p in src[cmd]))
+        return out if printed else out + ["  (nothing found)"]
     return None
 
 # ---------------------------------------------------------------- cli

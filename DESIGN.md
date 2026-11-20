@@ -450,7 +450,10 @@ other words, so the limitation stays (README).
     are not matched, or `search history` would match every row. A command
     printed by several lookups shows once, with the newest lookup's number,
     date and question and the count. Commands are never truncated.
-  - `--show N`: the full entry N, as printed then. `hint` accepts it after
+  - `--show N`: the full entry N, as printed then, with `# from <files>`
+    (home as `~`) after each of the user's rows, from the log's `rows`:
+    bad rows are better fixed in their source than hidden, and this is
+    how to find the source. `hint` accepts it after
     `history` and `-H` only: it shows a history entry, and after `search`
     it read as if it filtered the search.
   - `--delete N[,N|N-M]...`: blanks the entries' lines, so other numbers do

@@ -164,6 +164,10 @@ substrings. To see the full answer of a lookup, give its number:
 hint history --show 57
 ```
 
+Each of your rows in it is followed by the files it came from (`# from
+~/.bash_history`), so a row you don't want can be found and fixed in its
+source, with `grep -n` on the example shown in its status line.
+
 `history` and `search` take at most one word, plus options anywhere on
 the line. On its own `history` lists the last 10 lookups and `search`
 prints the usage (it needs a word). With two or more words the line is a

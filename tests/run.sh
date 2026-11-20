@@ -528,6 +528,22 @@ for a in "ssh --show 2" "--show 2 -c" "--show 2 -n 3" "5 --show 2" "--show" "--s
   status "--show with other things or no number ($a): exit 2" 2 $?
 done
 
+# --show lists each of the user's rows with its source files.
+slog="$tmp/src.jsonl"
+HINTDB_LOG="$slog" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
+HINTDB_LOG="$slog" hintdb find -q "list jobs" "fakesched -Nel" >/dev/null 2>&1
+out=$(HOME=/nonexistent HINTDB_LOG="$slog" hint history --show 1 2>&1)
+line "--show: the row's source after its status line" "$out" 4 "    # from $fix/history"
+if [ "$(sed -n 3p <<<"$out" | cut -c1-17)" = "    # your histor" ]; then ok "--show: status line first, then the source"
+else bad "--show: status line first, then the source" "$out"; fi
+has "--show: one source line per row" "$(grep -c '# from ' <<<"$out")" "3"
+out=$(HOME="$root" HINTDB_LOG="$slog" hint history --show 1 2>&1)
+has "--show: home shown as ~" "$out" "    # from ~/tests/fixtures/history"
+out=$(HOME=/nonexistent HINTDB_LOG="$slog" hint history --show 2 2>&1)
+line "--show: an uninstalled row's source under it" "$out" 4 "  #     from $fix/notes/cluster.md"
+printf '%s\n' '{"time": "2026-11-01T09:00:00", "query": "q", "printed": ["dig +short example.org", "  # model suggestion"], "rows": []}' > "$tmp/nosrc.jsonl"
+lacks "--show: model suggestions get no source line" "$(HINTDB_LOG="$tmp/nosrc.jsonl" hint history --show 1 2>&1)" "# from"
+
 # --delete: blank entries in a copy of the log; the others keep their numbers.
 cp "$flog" "$tmp/del.jsonl"
 D() { HINTDB_LOG="$tmp/del.jsonl" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }
