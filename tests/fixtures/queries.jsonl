@@ -1,0 +1,13 @@
+{"time": "2026-11-01T09:00:00", "query": "start the local registry", "guesses": [], "printed": ["docker run -d -p 5000:5000 registry:3", "  # your notes: make registry-up"], "rows": []}
+{"time": "2026-11-02T09:00:00", "query": "SSH tunnel to postgres", "guesses": [], "printed": ["ssh -N -L 5432:localhost:5432 db.example.org", "  # your history x1: tunnel to postgres"], "rows": []}
+{"time": "2026-11-03T09:00:00", "query": "zzqq frobnicate", "guesses": [], "printed": [], "rows": []}
+{not json, a damaged line
+{"time": "2026-11-04T09:00:00", "query": "disk usage of a directory", "guesses": [], "printed": ["du -sh /srv/current", "  # your history x1"], "rows": []}
+{"time": "2026-11-05T09:00:00", "query": "copy files to a server", "guesses": [], "printed": ["rsync -a /srv/data/ u@192.0.2.10:/srv/data/", "  # your history x2"], "rows": []}
+{"time": "2026-11-06T09:00:00", "query": "list listening ports", "guesses": [], "printed": ["ss -tlnp", "  # your history x5"], "rows": []}
+{"time": "2026-11-07T09:00:00", "query": "find large files", "guesses": [], "printed": ["find / -size +1G", "  # most likely (model suggestion)"], "rows": []}
+{"time": "2026-11-08T09:00:00", "query": "dns lookup", "guesses": [], "printed": ["dig +short example.org", "  # your history x3"], "rows": []}
+{"time": "2026-11-09T09:00:00", "query": "show docker containers", "guesses": [], "printed": ["docker ps -a", "  # your history x9"], "rows": []}
+{"time": "2026-11-10T09:00:00", "query": "follow a log file", "guesses": [], "printed": ["tail -f /var/log/syslog", "  # your history x2"], "rows": []}
+{"time": "2026-11-11T09:00:00", "query": "ssh with a key", "guesses": [], "printed": ["ssh -i ~/.ssh/key user@build2.example.org", "  # your history x4"], "rows": []}
+{"time": "2026-11-12T09:00:00", "query": "remove old host key", "guesses": [], "printed": ["ssh-keygen -R oldhost.example.org", "  # your history x1: remove old host key known_hosts"], "rows": []}

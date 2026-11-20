@@ -425,8 +425,8 @@ other words, so the limitation stays (README).
 ## Query log
 
 - **Purpose:** a record of real lookups, for looking up past answers
-  (`hint history`, `hint search`, planned), per-source usage and, later,
-  which printed line was used.
+  (`hint history`, `hint search`), per-source usage and, later, which
+  printed line was used.
 - **Written by `hintdb find`** from the command line, after the answer is
   printed, one JSON line per lookup: `time` (local, ISO), `query`,
   `guesses` (as passed), `printed` (the lines exactly as shown) and `rows`
@@ -438,6 +438,44 @@ other words, so the limitation stays (README).
   `/dev/null` turns it off). Mode 0600. One `O_APPEND` write per lookup, so
   several terminals do not interleave. A failed write only warns. No
   rotation for now: one line per lookup stays small.
+- **Read by `hintdb log`**, one line per match, the last N (`--last`,
+  default 10), oldest first like `history | tail`; `--count` prints the
+  number of lines instead. Matching: every word, case-insensitive plain
+  substrings. Exit 1 when nothing matches, like grep. No model call.
+  - history (default): one line per lookup whose question matches:
+    number, time, question.
+  - `--printed` (search): grep over past commands. One line per printed
+    command line (not the `#` lines) whose text or note matches; the
+    status labels ("your history xN", "your notes", "model suggestion")
+    are not matched, or `search history` would match every row. A command
+    printed by several lookups shows once, with the newest lookup's number,
+    date and question and the count. Commands are never truncated.
+  - `--show N`: the full entry N, as printed then. `hint` accepts it after
+    `history` and `-H` only: it shows a history entry, and after `search`
+    it read as if it filtered the search.
+  An entry's number is its line in the file: stable while the log is only
+  appended to; damaged lines are skipped but keep their numbers. Agreed
+  2026-11-20: printing every answer in full made the list unusable within
+  a day, so lists are one line per item and the full answer is asked for
+  by number.
+- **`hint` forms.** `hint history [OPTIONS] [WORD|N]` (questions; a lone
+  positive number is the last N) and `hint search [OPTIONS] WORD` (printed
+  commands) are commands when at most one plain word follows, with the
+  options `-n/--last N`, `-c/--count` and, for history only,
+  `-s/--show NUM` (alone) anywhere. `history` alone lists the last 10
+  lookups, like bash `history`; `search` alone prints the usage, since it
+  needs a word. Two or more plain words make the line a question, and an
+  unknown option with at most one plain word prints the usage. `help` is a command only
+  alone. Flags for several words: `-H/--history [WORD...]`,
+  `-S/--search WORD...`, same options. Agreed 2026-11-20: a reserved word
+  that swallowed questions would fail silently, giving the wrong kind of
+  answer, so the word forms are kept to one plain word (a real question
+  leads with words, "what does history -c do"); a miss there says how to
+  ask it as a question instead. A known option marks a command: `hint
+  history postgres --count` was first asked as a question, which the user
+  found confusing. `hint history` alone first printed the usage too; once
+  lists were one line per lookup, the user wanted it to list like bash
+  (2026-11-20). `hint help` is the way to the usage.
 - **Private:** like shell history it holds the user's commands; it stays
   local and is never committed. Tests point it into their scratch directory.
 

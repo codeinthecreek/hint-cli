@@ -125,6 +125,82 @@ Annotating commands makes them findable by intent later:
 ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 ```
 
+### Past lookups
+
+Every lookup is kept in the query log (see below). Like shell history, you
+can look through it again without asking the model. The last 10 lookups:
+
+```bash
+hint history
+```
+
+Past questions containing a word:
+
+```bash
+hint history tunnel
+```
+
+The last 20 lookups:
+
+```bash
+hint history 20
+```
+
+Past commands containing a word, like grep over the answers you were given:
+
+```bash
+hint search rsync
+```
+
+`history` prints one line per lookup: its number, the time and the
+question. `search` prints one line per command that was printed (its note
+counts for matching, but the "your history" and "your notes" labels do
+not), followed by the number, date and question of the newest lookup that
+printed it, and how many lookups did. Both list oldest first, so the newest
+is just above your prompt. Matching is case-insensitive and on plain
+substrings. To see the full answer of a lookup, give its number:
+
+```bash
+hint history --show 57
+```
+
+`history` and `search` take at most one word, plus options anywhere on
+the line. On its own `history` lists the last 10 lookups and `search`
+prints the usage (it needs a word). With two or more words the line is a
+question for the model (`hint history without duplicates`, `hint search
+for files containing foo`). An unknown option prints the usage, as does
+`hint help`.
+How many past questions mention postgres:
+
+```bash
+hint history postgres --count
+```
+
+For several words, or a number to search for, use `-H` / `-S`:
+
+```bash
+hint -H --last 5 ssh key
+```
+
+```bash
+hint -S --count docker
+```
+
+| Flag | Meaning |
+|---|---|
+| `-H`, `--history [WORD...]` | past questions containing all WORDs (no words: every lookup) |
+| `-S`, `--search WORD...` | past commands containing all WORDs |
+| `-n`, `--last N` | only the last N matching lines (default 10) |
+| `-c`, `--count` | print the number of matching lines instead |
+| `-s`, `--show NUM` | the full answer of lookup NUM; `history` and `-H` only, on its own (no words, `-n` or `-c`) |
+
+Options can go before or after the words. `-n` and `-c` work with all four
+forms; `--show` only with `history` and `-H`. A
+lookup's number is its line in the log file, so deleting lines from the
+log by hand renumbers the ones after them.
+
+`hint help` alone prints the usage; `hint help me ...` is a question.
+
 ### hintdb commands
 
 | Command | Purpose |
@@ -136,6 +212,8 @@ ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 | `hintdb update` | rebuild only if something changed |
 | `hintdb stats` | entries per kind and man page count, for checking dedup |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
+| `hintdb log [--printed] [-n N] [-c] [WORD...]` | past questions containing all WORDs; `--printed`: past commands (used by `hint history` / `hint search`) |
+| `hintdb log --show N` | the full entry N of the query log |
 | `hintdb query [-n N] WORDS...` | `find`'s ranking for the words alone, with scores, then matching man pages (debugging; not used by `hint`) |
 
 Source kinds are detected from the file name. Use `--kind` to override, e.g. for

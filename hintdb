@@ -16,6 +16,9 @@ temp file that atomically replaces the DB, because dedup is global across source
   hintdb query [-n N] [--no-update] WORDS...         find's ranking for the words
                                                      alone, with scores (debugging)
   hintdb stats                                       row counts, for checking dedup
+  hintdb log [--printed] [-n N] [-c] [WORD...]       past questions containing all
+                                                     WORDs (--printed: past commands)
+  hintdb log --show N                                the full entry number N
 
 Query log: each `find` from the command line appends one JSON line (time,
 question, guesses, printed lines, each printed row's source files) to
@@ -1140,6 +1143,91 @@ def log_lookup(query, guesses, printed, rows):
     except OSError as e:
         print(f"hintdb: cannot write query log {LOG}: {e}", file=sys.stderr)
 
+def read_log():
+    """Entries of the query log, oldest first, each with its line number in
+    the file as "n" (stable: the log is only appended to). Unreadable lines
+    are skipped but keep their numbers."""
+    out = []
+    try:
+        with open(LOG, encoding="utf-8", errors="replace") as f:
+            for n, line in enumerate(f, 1):
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and isinstance(rec.get("query"), str):
+                    rec["n"] = n
+                    out.append(rec)
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def has_words(text, words):
+    text = text.lower()
+    return all(w.lower() in text for w in words)
+
+
+def printed_of(rec):
+    return [x for x in rec.get("printed") or [] if isinstance(x, str)]
+
+
+def log_time(rec):
+    return str(rec.get("time", "")).replace("T", " ")[:16]
+
+
+def log_history(words):
+    """One line per lookup whose question contains every word
+    (case-insensitive substrings): number, time, question."""
+    return ["%5d  %s  %s" % (r["n"], log_time(r), r["query"])
+            for r in read_log() if has_words(r["query"], words)]
+
+
+STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your notes)(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
+
+
+def status_note(line):
+    """The note of a printed status line, without its label ("your history
+    x3: ", "your notes: ", "model suggestion"), so labels do not match."""
+    if not line.startswith("  #"):
+        return ""
+    return STATUS_LABEL.sub("", line, count=1)
+
+
+def log_search(words):
+    """One line per printed command whose text or status comment contains
+    every word, like grep over past answers. Only command lines are shown;
+    a command printed by several lookups is shown once, with its newest
+    lookup (number, date, question) and how many lookups printed it."""
+    hits = {}   # command -> [newest rec, lookups]
+    for rec in read_log():
+        lines = printed_of(rec)
+        seen = set()
+        for i, cmd in enumerate(lines):
+            if cmd[:1] in ("#", " ", ""):
+                continue
+            note = status_note(lines[i + 1]) if i + 1 < len(lines) else ""
+            if cmd in seen or not has_words(cmd + "\n" + note, words):
+                continue
+            seen.add(cmd)
+            h = hits.pop(cmd, [None, 0])   # re-insert: order by newest lookup
+            hits[cmd] = [rec, h[1] + 1]
+    out = []
+    for cmd, (rec, k) in hits.items():
+        tail = "%d  %s %s" % (rec["n"], log_time(rec)[:10], rec["query"])
+        tail += f" (x{k})" if k > 1 else ""
+        out.append(f"{cmd}  # {tail}")
+    return out
+
+
+def log_show(n):
+    """The full entry with line number n: header, then the printed lines."""
+    for r in read_log():
+        if r["n"] == n:
+            lines = ["%5d  %s  %s" % (n, log_time(r), r["query"])]
+            return lines + (["  " + x for x in printed_of(r)] or ["  (nothing found)"])
+    return None
+
 # ---------------------------------------------------------------- cli
 
 
@@ -1169,6 +1257,13 @@ def main():
     fd.add_argument("--no-update", action="store_true")
     fd.add_argument("--debug", action="store_true", help="scores to stderr")
     fd.add_argument("guesses", nargs="*", help="the model's guessed commands")
+    lg = sub.add_parser("log")
+    lg.add_argument("--printed", action="store_true",
+                    help="grep the printed commands instead of the questions")
+    lg.add_argument("-n", "--last", type=int, default=10, help="last N matching lines")
+    lg.add_argument("-c", "--count", action="store_true", help="print the number of matching lines")
+    lg.add_argument("-s", "--show", type=int, metavar="N", help="the full entry number N")
+    lg.add_argument("words", nargs="*")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
     q.add_argument("--no-update", action="store_true")
@@ -1216,6 +1311,22 @@ def main():
             print(line)
         sys.stdout.flush()
         log_lookup(args.query, args.guesses, out, rows)
+    elif args.op == "log":
+        if args.show is not None:
+            lines = log_show(args.show)
+            if lines is None:
+                sys.exit(f"hintdb: no entry {args.show} in the query log")
+            print("\n".join(lines))
+            sys.exit(0)
+        if args.last < 1:
+            sys.exit("hintdb: --last needs a number of 1 or more")
+        lines = log_search(args.words) if args.printed else log_history(args.words)
+        if args.count:
+            print(len(lines))
+        else:
+            for line in lines[-args.last:]:
+                print(line)
+        sys.exit(0 if lines else 1)
     elif args.op == "query":
         if not args.no_update:
             update()
