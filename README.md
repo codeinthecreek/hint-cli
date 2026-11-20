@@ -67,9 +67,8 @@ The index (`hint.db`) is built from your sources:
   use count, a template (`ssh -L <N>:localhost:<N> <HOST>`) and two real
   examples. Flags are kept as written; only values are replaced.
 - **Notes.** Trailing `# comments` in history, markdown headings and comments,
-  and justfile and Makefile recipe names and doc comments become searchable
-  notes. A note
-  is shown on a merged row only if at least half of its uses carry it;
+  justfile and Makefile recipe names and doc comments, and the comments
+  and bodies of git aliases become searchable notes. A note is shown on a merged row only if at least half of its uses carry it;
   otherwise it stays with its own example.
 - **Man pages.** The NAME lines of installed section 1 and 8 pages (from
   `apropos .`) go into a separate `man.db`, used for the summary on
@@ -115,10 +114,20 @@ machine, such as a cheatsheet or a project's justfile:
 hintdb add ~/notes/kubernetes.md ~/src/myproject/justfile
 ```
 
+Git aliases are read from the `[alias]` section of a git config file. Each
+alias becomes a row `git <alias>`, found by its comment and body. Add the
+file that holds them (`[include]` is not followed, so if `~/.gitconfig`
+includes your aliases from another file, add that file instead):
+
+```bash
+hintdb add ~/.gitconfig
+```
+
 Register files rather than whole folders of old notes: commands for tools or
 platforms you no longer use come back as noise. (A directory is walked for
 `*.md`, `*.markdown`, `*.txt`, `justfile`, `*.just`, `Makefile`, `makefile`,
-`GNUmakefile` and `*.mk`, skipping hidden directories.)
+`GNUmakefile`, `*.mk`, `.gitconfig` and `.git_aliases`, skipping hidden
+directories.)
 
 For commands from the current shell session to be indexed, the shell has to
 write its history out after each command (a script can't do this for the calling
@@ -214,7 +223,7 @@ What `hint history --show 57` prints:
 - **search** prints one line per command that was printed, then the number,
   date and question of the newest lookup that printed it, and how many did.
   A command's note counts for matching; the "your history", "your notes",
-  "your Makefile" and "your justfile" labels do not.
+  "your Makefile", "your justfile" and "your git aliases" labels do not.
 - **--show** prints the whole answer, each of your rows followed by the
   files it came from, so a row you don't want can be found and fixed in its
   source (`grep -n` on the example in its status line).
@@ -442,10 +451,11 @@ Data flow from sources to the printed answer, traced with the example query
   notes *.md *.txt --+   extract
   justfiles ---------+   - history: one line each, trailing "# note"
   Makefiles ---------+   - md: shell fences + "$ " lines; note = heading,
-          |                prose line, "# comment" above
+  git aliases -------+     prose line, "# comment" above
           |              - just, make: recipe lines, "\" lines joined, only
           |                single commands (no if/for, ; && ||, echo);
           |                note = "just|make <recipe>" + doc
+          |              - git: "git <alias>"; note = comment above + body
           v
   clean   drop: trivial (ls, cd, vim file ...) unless noted
                 secrets (token, password, keys ...)

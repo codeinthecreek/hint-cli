@@ -211,7 +211,8 @@ has "make: *.mk detected" "$rec" "shellcheck --severity=warning *.sh	make lint"
 has "just: \\ lines joined, continuation keeps its dashes" "$rec" \
   "docker compose up -d --remove-orphans	just up"
 lacks "just: for loop dropped" "$rec" "kubectl apply"
-lacks "recipes: echo lines dropped (@echo and plain echo)" "$rec" "echo"
+lacks "recipes: @echo lines dropped" "$rec" "packing docs"
+lacks "recipes: plain echo lines dropped" "$rec" "echo unpacking"
 rdb() { HINTDB_DB="$tmp/recipes.db" HINTDB_SOURCES="$tmp/recipes_sources" \
   HISTFILE="$tmp/empty_history" hintdb "$@"; }
 out=$(rdb find -q "pack the docs folder" 2>&1)
@@ -224,13 +225,30 @@ has "stats: Makefile and justfile entries counted per kind" "$(rdb stats)" "make
 out=$(python3 - "$root/hintdb" <<'EOF'
 import importlib.machinery, sys
 h = importlib.machinery.SourceFileLoader("h", sys.argv[1]).load_module()
-for line in ("  # your Makefile: make up", "  # your justfile: just up"):
+for line in ("  # your Makefile: make up", "  # your justfile: just up",
+             "  # your git aliases: sync"):
     print(repr(h.status_note(line)))
 EOF
 )
 if [ "$out" = "'make up'
-'just up'" ]; then ok "search: Makefile and justfile labels do not match"
-else bad "search: Makefile and justfile labels do not match" "$out"; fi
+'just up'
+'sync'" ]; then ok "search: Makefile, justfile and git alias labels do not match"
+else bad "search: Makefile, justfile and git alias labels do not match" "$out"; fi
+
+has "git: .git_aliases found in a directory walk, only [alias] read" "$(rdb stats)" "git	5 entries"
+lacks "git: other sections skipped" "$rec" "Example User"
+has "git: row is git <alias>, section comment as note, then the body" "$rec" \
+  "git st	repo status; status -s"
+has "git: comment lines above joined, ! body as written, quotes removed" "$rec" \
+  "git sync	sync default branch: fetch + ff-only merge and push, safe to run any time; !f() { D=\$(git default); git switch \$D && git fetch origin --prune; }; f"
+has "git: the value's trailing comment after the body" "$rec" \
+  "git lf	log --follow --; path/to/filename"
+has "git: \\ continues a value; a blank line ends a doc comment" "$rec" \
+  "git pretty	log --pretty=format:'%h %s' --date=short"
+has "git: escaped quotes in a value" "$rec" "git shout	!echo \"done\""
+out=$(rdb find -q "sync the default branch" 2>&1)
+has "git: status label says your git aliases" "$out" \
+  "  # your git aliases: sync default branch"
 
 echo "== query (keyword search, debugging only)"
 out=$(hintdb query DNS lookup)

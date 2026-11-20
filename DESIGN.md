@@ -390,11 +390,13 @@ other words, so the limitation stays (README).
 
 ## Index
 
-- **Sources:** bash history, markdown and text notes, justfiles, Makefiles.
-  Man NAME lines (sections 1 and 8, from `apropos .`) go into a separate
-  `man.db`. Direction agreed 2026-11-18: notes only when targeted (such as a
-  Kubernetes cheatsheet), not folders of old notes from another platform;
-  add recipe files (done), then git and bash aliases, then shell scripts.
+- **Sources:** bash history, markdown and text notes, justfiles, Makefiles,
+  git aliases. Man NAME lines (sections 1 and 8, from `apropos .`) go into a
+  separate `man.db`. Direction agreed 2026-11-18: notes only when targeted
+  (such as a Kubernetes cheatsheet), not folders of old notes from another
+  platform; add recipe files (done), git aliases (done), then bash aliases,
+  then shell scripts. On the eval sets notes supply 5 benchmark answers;
+  without them benchmark not shown goes 14 -> 16, the rest unchanged.
 - **Recipe files** (justfiles, Makefiles; agreed 2026-11-20): a recipe line
   ending in `\` is joined with the lines it continues on; the recipe
   prefixes (`@ -`, and `+` in Makefiles) are stripped once, from the start
@@ -403,17 +405,30 @@ other words, so the limitation stays (README).
   that starts with a shell keyword (if, for, while, ...) or has an
   unquoted `;`, `&&` or `||` is dropped whole, not split (a real Makefile
   tested 2026-11-18 gave 86 rows, ~60 of them shell fragments like `fi`).
-  `echo` lines are dropped too: progress messages, and merged with history
-  echoes they made a top row (`echo <STR> x11`, 2026-11-20). A row from a
-  recipe file is labelled "your Makefile" or "your justfile" instead of
-  "your notes" (history still comes first when a row is in both).
   Splitting such lines into their commands was the other option; left for
-  shell scripts, where it is needed. The note is `just|make <recipe>` plus
-  the doc: a `## doc` on a Makefile target line, else the comment line
-  directly above the recipe (a blank line in between ends it, so section
-  dividers are not taken). Makefile pattern rules (`%.o:`) and special
-  targets (`.PHONY:`) are skipped. On the eval sets notes supply 5 benchmark answers;
-  without them benchmark not shown goes 14 -> 16, the rest unchanged.
+  shell scripts, where it is needed. `echo` lines are dropped too: progress
+  messages, and merged with history echoes they made a top row (`echo
+  <STR> x11`, 2026-11-20). The note is `just|make <recipe>` plus the doc: a
+  `## doc` on a Makefile target line, else the comment line directly above
+  the recipe (a blank line in between ends it, so section dividers are not
+  taken). Makefile pattern rules (`%.o:`) and special targets (`.PHONY:`)
+  are skipped.
+- **Git aliases** (agreed 2026-11-20): the `[alias]` section of a git
+  config file (`.gitconfig`, `.git_aliases`, `git/config`; `[include]` is
+  not followed, so an included file is registered itself). The row is what
+  you type, `git <alias>`, not the body: in a real aliases file the most
+  used and most useful aliases were `!` shell functions (`!f() { ...; };
+  f`), which the recipe rule would drop and which are not commands to
+  recall anyway. The note is the comment lines directly above the alias
+  (joined; a blank line ends them), then the body, then the value's own
+  trailing comment, so an alias is found by what it does. Git's quoting,
+  `\` escapes and `\` continuations are decoded. All aliases are indexed,
+  not only those in this machine's history: the file is shared with other
+  machines, and recalling commands used elsewhere is the point. An alias
+  also in history merges with that row, so its uses still count.
+- **Labels:** a row from a recipe file or git aliases is labelled "your
+  Makefile", "your justfile" or "your git aliases" instead of "your notes";
+  history comes first when a row is in both.
 - **Cleaning:** drop trivial commands (unless annotated), lines that look like
   secrets, `hint`/`hintdb` lines plus `HINTDB_IGNORE`, and one-off history
   lines whose command is not on PATH.
