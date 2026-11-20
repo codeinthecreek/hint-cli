@@ -160,6 +160,17 @@ has "no rebuild when nothing changed" "$out" "entries up to date"
 
 out=$(hintdb stats)
 has "man index skips non-command and POSIX pages" "$out" "man	7 pages"
+out=$(HOME=/nonexistent hintdb stats)
+has "stats per source: history" "$out" "$fix/history	31 entries, 30 only from this source"
+has "stats per source: a source sharing a row with history" "$out" \
+  "$fix/notes/k8s.md	3 entries, 2 only from this source"
+has "stats per source: one entry" "$out" "$fix/notes/cluster.md	1 entry, 1 only from this source"
+if [ "$(grep -A99 '^man' <<<"$out" | grep -c ' only from this source')" = 4 ]; then
+  ok "stats per source: one line per source file, after the kind and man lines"
+else bad "stats per source: one line per source file, after the kind and man lines" "$out"; fi
+line "stats per source: most entries first" "$out" 4 "$fix/history	31 entries, 30 only from this source"
+has "stats per source: home shown as ~" "$(HOME="$root" hintdb stats)" \
+  "~/tests/fixtures/history	31 entries"
 
 echo "== query (keyword search, debugging only)"
 out=$(hintdb query DNS lookup)
