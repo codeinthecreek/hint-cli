@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """hintdb - cleaned, deduplicated command index for `hint` (SQLite FTS5, stdlib only).
 
-Sources (bash history, markdown/text notes, justfiles; files or directories) are
-listed in ~/.config/hintdb/sources. Every ingest is a full clean rebuild into a
-temp file that atomically replaces the DB, because dedup is global across sources.
+Sources (bash history, markdown/text notes, justfiles, Makefiles; files or
+directories) are listed in ~/.config/hintdb/sources. Every ingest is a full
+clean rebuild into a temp file that atomically replaces the DB, because dedup
+is global across sources.
 `find` and `query` rebuild automatically when any source file changed (mtime/size).
 
-  hintdb add PATH... [--kind history|md|text|just]   register sources, rebuild
+  hintdb add PATH... [--kind history|md|text|just|make]
+                                                     register sources, rebuild
   hintdb remove PATH...                              unregister sources, rebuild
   hintdb sources                                     list registered sources
   hintdb rebuild                                     force a clean ingest
@@ -17,6 +19,8 @@ temp file that atomically replaces the DB, because dedup is global across source
                                                      alone, with scores (debugging)
   hintdb stats                                       row counts per kind and per
                                                      source file, for checking dedup
+  hintdb stats --source PATH                         the entries from one source
+                                                     file (or a directory's files)
   hintdb log [--printed] [-n N] [-c] [WORD...]       past questions containing all
                                                      WORDs (--printed: past commands)
   hintdb log --show N                                the full entry number N
@@ -52,9 +56,11 @@ DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
 LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
 
-KINDS = ("history", "md", "text", "just")
-NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just"}
+KINDS = ("history", "md", "text", "just", "make")
+NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just",
+            ".mk": "make"}
 JUST_NAMES = {"justfile", ".justfile"}
+MAKE_NAMES = {"makefile", "gnumakefile"}
 
 # ---------------------------------------------------------------- cleaning rules
 
@@ -396,41 +402,114 @@ def extract_text(path):
             ctx = s.lstrip("#").strip()[:200]
 
 
-RECIPE = re.compile(r"^@?([A-Za-z_][\w-]*)(?:\s[^:]*)?:(?!=)")
+# Recipe files (justfiles, Makefiles). A recipe body line ending in `\`
+# continues on the next line; the pieces are joined into one command, then
+# the recipe prefixes (@ - +) are stripped once, from its start. Only single
+# simple commands are kept: a joined line starting with a shell keyword or
+# containing an unquoted ; && || (if-blocks, loops, chains) is dropped whole,
+# and so is echo (progress messages, not commands to recall).
+# The doc comment is the comment line directly above the recipe (a blank line
+# in between ends it, so section dividers are not taken); in a Makefile a
+# `## doc` on the target line comes first.
+
+JUST_RECIPE = re.compile(r"^@?([A-Za-z_][\w-]*)(?:\s[^:]*)?:(?!=)")
+# `name [name...]:` or `name::`, not `X := y`, `X ::= y`, `.PHONY:`, `%.o:`.
+MAKE_TARGET = re.compile(r"^(?!\.)([\w/.-]+)(?:\s+[\w/.-]+)*\s*::?(?![=:])")
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "for", "while", "until",
+                  "do", "done", "case", "esac", "select", "function", "[[", "!"}
+
+
+def simple_command(cmd):
+    """One command: not a shell keyword first, no unquoted ; && ||."""
+    words = cmd.split()
+    if not words or words[0] in SHELL_KEYWORDS or words[0][0] in "({":
+        return False
+    sq = dq = esc = False
+    for i, ch in enumerate(cmd):
+        if esc:
+            esc = False
+        elif ch == "\\" and not sq:
+            esc = True
+        elif ch == "'" and not dq:
+            sq = not sq
+        elif ch == '"' and not sq:
+            dq = not dq
+        elif not sq and not dq and (ch == ";" or cmd.startswith(("&&", "||"), i)):
+            return False
+    return True
+
+
+def recipe_commands(body, make):
+    """A recipe's body lines -> (cmd, trailing note) for its simple commands."""
+    buf = ""
+    for s in body:
+        if not buf and s.startswith("#"):  # shebang or comment inside a recipe
+            continue
+        if s.endswith("\\") and not s.endswith("\\\\"):
+            buf += s[:-1].strip() + " "
+            continue
+        line = (buf + s).strip()
+        buf = ""
+        line = line.lstrip("@-+" if make else "@-").strip()
+        if make:
+            line = line.replace("$$", "$")
+        cmd, note = split_comment(line)
+        if cmd and simple_command(cmd) and cmd.split()[0] != "echo":
+            yield cmd, note
+
+
+def extract_recipes(path, make):
+    """Recipe body commands; note = `just|make <recipe>` + doc comment."""
+    tool = "make" if make else "just"
+    recipe = None
+    body = []
+    doc = comment = ""
+
+    def flush():
+        for cmd, note in recipe_commands(body, make):
+            yield cmd, join_notes(f"{tool} {recipe}", doc, note)
+
+    for line in read_lines(path):
+        if not line.strip():
+            comment = ""
+            continue
+        if recipe is not None and (line[:1] == "\t" or (not make and line[:1] == " ")):
+            body.append(line.strip())
+            continue
+        s = line.strip()
+        if s.startswith("#"):  # does not end a recipe; may be the next one's doc
+            comment = s.lstrip("#").strip()
+            continue
+        if recipe is not None:
+            yield from flush()
+            recipe, body = None, []
+        if s.startswith("["):  # just recipe attributes like [private]
+            continue
+        if make:
+            head, tail = split_comment(s)
+            m = MAKE_TARGET.match(head)
+            if m:
+                recipe, doc = m.group(1), tail.lstrip("#").strip() or comment
+        else:
+            m = JUST_RECIPE.match(line)
+            if m:
+                recipe, doc = m.group(1), comment
+        comment = ""
+    if recipe is not None:
+        yield from flush()
 
 
 def extract_just(path):
-    """Recipe body lines; note = `just <recipe>` + doc comment above the recipe."""
-    recipe = None
-    doc = comment = ""
-    for line in read_lines(path):
-        if not line.strip():
-            continue
-        if line[:1] in " \t":
-            if recipe is None:
-                continue
-            s = line.strip()
-            if s.startswith("#"):  # shebang or comment inside a recipe
-                continue
-            cmd, note = split_comment(s.lstrip("@-").strip())
-            if cmd:
-                yield cmd, join_notes("just " + recipe, doc, note)
-            continue
-        s = line.strip()
-        if s.startswith("#"):
-            comment = s.lstrip("#").strip()
-            continue
-        if s.startswith("["):  # recipe attributes like [private]
-            continue
-        m = RECIPE.match(line)
-        if m:
-            recipe, doc, comment = m.group(1), comment, ""
-        else:
-            recipe, comment = None, ""
+    return extract_recipes(path, make=False)
+
+
+def extract_make(path):
+    return extract_recipes(path, make=True)
 
 
 EXTRACT = {"history": extract_history, "md": extract_markdown,
-           "text": extract_text, "just": extract_just}
+           "text": extract_text, "just": extract_just,
+           "make": extract_make}
 
 # ---------------------------------------------------------------- sources
 
@@ -439,6 +518,8 @@ def detect_kind(path):
     base = os.path.basename(path)
     if base.lower() in JUST_NAMES:
         return "just"
+    if base.lower() in MAKE_NAMES:
+        return "make"
     ext = os.path.splitext(base)[1].lower()
     if ext in NOTE_EXT:
         return NOTE_EXT[ext]
@@ -464,7 +545,7 @@ def load_sources():
 def save_sources(srcs):
     os.makedirs(os.path.dirname(SOURCES), exist_ok=True)
     with open(SOURCES, "w") as f:
-        f.write("# kind<TAB>path   kind: history|md|text|just|auto (auto = detect per file)\n")
+        f.write("# kind<TAB>path   kind: history|md|text|just|make|auto (auto = detect per file)\n")
         for kind, path in srcs:
             f.write(f"{kind}\t{path}\n")
 
@@ -491,7 +572,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "11"
+SCHEMA_VERSION = "13"
 
 
 def fingerprint(files):
@@ -567,7 +648,8 @@ def build(files):
         # Templated rows show real examples (most recent first); plain rows
         # show up to 2 other variants.
         examples = [best] + by_count[:1] if display != best else by_count[:2]
-        kind = "history" if "history" in g["kinds"] else "note"
+        # The status label's kind: history first, then a recipe file, then notes.
+        kind = next((k for k in ("history", "make", "just") if k in g["kinds"]), "note")
         prog, args, data = split_cmd(best)
         cmdword = os.path.basename(prog.split()[0]) if prog else ""
         vnotes = g["vnotes"]
@@ -1084,7 +1166,8 @@ def find(text, guesses, debug=False, rows=None):
 
         def row_lines(x):
             display, examples, note, count, kind = x[7], x[8], x[9], x[5], x[11]
-            status = (f"your history x{count}" if kind == "history" else "your notes")
+            status = (f"your history x{count}" if kind == "history"
+                      else SOURCE_LABEL.get(kind, "your notes"))
             status += f": {note}" if note else ""
             ex = json.loads(examples) if examples else []
             if "<" in display and ex:
@@ -1137,6 +1220,24 @@ def source_counts(con):
             if len(srcs) == 1:
                 r[1] += 1
     return sorted(((p, tuple(r)) for p, r in per.items()), key=lambda x: (-x[1][0], x[0]))
+
+
+def source_entries(con, path):
+    """One line per entry from the source file PATH (or any file under the
+    directory PATH), most uses first: `display  [xN]  # note`, plus the other
+    sources for an entry that is not only from this one."""
+    path = os.path.abspath(os.path.expanduser(path))
+    mine = lambda p: p == path or p.startswith(path.rstrip("/") + "/")
+    rows = []
+    for display, dnote, count, srcs in con.execute(
+            "SELECT display, dnote, count, sources FROM entries"):
+        srcs = json.loads(srcs or "[]")
+        if not any(mine(os.path.abspath(p)) for p in srcs):
+            continue
+        other = [tilde(p) for p in srcs if not mine(os.path.abspath(p))]
+        note = "; ".join(x for x in (dnote, other and "also in " + ", ".join(other)) if x)
+        rows.append((-count, display, f"{display}  [x{count}]" + (f"  # {note}" if note else "")))
+    return [r[2] for r in sorted(rows)]
 
 # ---------------------------------------------------------------- query log
 
@@ -1202,12 +1303,14 @@ def log_history(words):
             for r in read_log() if has_words(r["query"], words)]
 
 
-STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your notes)(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
+SOURCE_LABEL = {"make": "your Makefile", "just": "your justfile"}
+STATUS_LABEL = re.compile(r"^\s*#\s*(?:your history x\d+|your (?:notes|Makefile|justfile))(?:[:;]\s*|$)|^\s*#.*model suggestion\)?$")
 
 
 def status_note(line):
     """The note of a printed status line, without its label ("your history
-    x3: ", "your notes: ", "model suggestion"), so labels do not match."""
+    x3: ", "your notes: ", "your Makefile: ", "model suggestion"), so labels
+    do not match."""
     if not line.startswith("  #"):
         return ""
     return STATUS_LABEL.sub("", line, count=1)
@@ -1355,7 +1458,8 @@ def main():
     sub.add_parser("sources")
     sub.add_parser("rebuild")
     sub.add_parser("update")
-    sub.add_parser("stats")
+    a = sub.add_parser("stats")
+    a.add_argument("--source", metavar="PATH")
     fd = sub.add_parser("find")
     fd.add_argument("-q", "--query", required=True, help="the question, in the user's words")
     fd.add_argument("--no-update", action="store_true")
@@ -1397,6 +1501,16 @@ def main():
         report(update(force=True))
     elif args.op == "update":
         report(update())
+    elif args.op == "stats" and args.source:
+        update()
+        con = sqlite3.connect(DB)
+        lines = source_entries(con, args.source)
+        con.close()
+        if not lines:
+            sys.exit(f"hintdb: no entries from {args.source} "
+                     "(see `hintdb stats` for the source files)")
+        for line in lines:
+            print(line)
     elif args.op == "stats":
         update()
         con = sqlite3.connect(DB)

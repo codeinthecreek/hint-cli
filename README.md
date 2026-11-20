@@ -67,7 +67,8 @@ The index (`hint.db`) is built from your sources:
   use count, a template (`ssh -L <N>:localhost:<N> <HOST>`) and two real
   examples. Flags are kept as written; only values are replaced.
 - **Notes.** Trailing `# comments` in history, markdown headings and comments,
-  and justfile recipe names and doc comments become searchable notes. A note
+  and justfile and Makefile recipe names and doc comments become searchable
+  notes. A note
   is shown on a merged row only if at least half of its uses carry it;
   otherwise it stays with its own example.
 - **Man pages.** The NAME lines of installed section 1 and 8 pages (from
@@ -107,8 +108,8 @@ ollama pull qwen2.5-coder:3b
 ```
 
 On first use, `hintdb` registers `$HISTFILE` (or `~/.bash_history`) as a source.
-Add the notes files and justfiles you keep for work on this machine, such as a
-cheatsheet or a project's justfile:
+Add the notes files, justfiles and Makefiles you keep for work on this
+machine, such as a cheatsheet or a project's justfile:
 
 ```bash
 hintdb add ~/notes/kubernetes.md ~/src/myproject/justfile
@@ -116,8 +117,8 @@ hintdb add ~/notes/kubernetes.md ~/src/myproject/justfile
 
 Register files rather than whole folders of old notes: commands for tools or
 platforms you no longer use come back as noise. (A directory is walked for
-`*.md`, `*.markdown`, `*.txt`, `justfile` and `*.just`, skipping hidden
-directories.)
+`*.md`, `*.markdown`, `*.txt`, `justfile`, `*.just`, `Makefile`, `makefile`,
+`GNUmakefile` and `*.mk`, skipping hidden directories.)
 
 For commands from the current shell session to be indexed, the shell has to
 write its history out after each command (a script can't do this for the calling
@@ -212,8 +213,8 @@ What `hint history --show 57` prints:
   question.
 - **search** prints one line per command that was printed, then the number,
   date and question of the newest lookup that printed it, and how many did.
-  A command's note counts for matching; the "your history" and "your notes"
-  labels do not.
+  A command's note counts for matching; the "your history", "your notes",
+  "your Makefile" and "your justfile" labels do not.
 - **--show** prints the whole answer, each of your rows followed by the
   files it came from, so a row you don't want can be found and fixed in its
   source (`grep -n` on the example in its status line).
@@ -265,12 +266,13 @@ hint -S --count docker
 
 | Command | Purpose |
 |---|---|
-| `hintdb add PATH... [--kind history\|md\|text\|just]` | register sources and rebuild |
+| `hintdb add PATH... [--kind history\|md\|text\|just\|make]` | register sources and rebuild |
 | `hintdb remove PATH...` | unregister sources and rebuild |
 | `hintdb sources` | list registered sources |
 | `hintdb rebuild` | force a full rebuild |
 | `hintdb update` | rebuild only if something changed |
 | `hintdb stats` | entries per kind, man page count, and entries per source file (and how many come from that file only) |
+| `hintdb stats --source PATH` | the entries from one source file (or from the files under a directory), most uses first |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log [--printed] [-n N] [-c] [WORD...]` | past questions containing all WORDs; `--printed`: past commands (used by `hint history` / `hint search`) |
 | `hintdb log --show N` | the full entry N of the query log, with each row's source files |
@@ -405,6 +407,14 @@ also in another source, often your history. For example:
 ~/notes/kubernetes.md	140 entries, 122 only from this source
 ```
 
+To see the entries themselves, one per line with use count and note (and
+the other sources, for an entry not only from this one), pass the file or a
+directory of sources:
+
+```bash
+hintdb stats --source ~/src/myproject/Makefile
+```
+
 ```bash
 hintdb query remove host key
 ```
@@ -431,9 +441,11 @@ Data flow from sources to the printed answer, traced with the example query
   ~/.bash_history ---+
   notes *.md *.txt --+   extract
   justfiles ---------+   - history: one line each, trailing "# note"
-          |              - md: shell fences + "$ " lines; note = heading,
+  Makefiles ---------+   - md: shell fences + "$ " lines; note = heading,
           |                prose line, "# comment" above
-          |              - just: recipe lines; note = "just <recipe>" + doc
+          |              - just, make: recipe lines, "\" lines joined, only
+          |                single commands (no if/for, ; && ||, echo);
+          |                note = "just|make <recipe>" + doc
           v
   clean   drop: trivial (ls, cd, vim file ...) unless noted
                 secrets (token, password, keys ...)

@@ -390,12 +390,29 @@ other words, so the limitation stays (README).
 
 ## Index
 
-- **Sources:** bash history, markdown and text notes, justfiles. Man NAME
-  lines (sections 1 and 8, from `apropos .`) go into a separate `man.db`.
-  Direction agreed 2026-11-18, not built yet: notes only when targeted
-  (such as a Kubernetes cheatsheet), not folders of old notes from another
-  platform; add recipe files (Makefiles, justfiles), bash and git aliases,
-  and shell scripts. On the eval sets notes supply 5 benchmark answers;
+- **Sources:** bash history, markdown and text notes, justfiles, Makefiles.
+  Man NAME lines (sections 1 and 8, from `apropos .`) go into a separate
+  `man.db`. Direction agreed 2026-11-18: notes only when targeted (such as a
+  Kubernetes cheatsheet), not folders of old notes from another platform;
+  add recipe files (done), then git and bash aliases, then shell scripts.
+- **Recipe files** (justfiles, Makefiles; agreed 2026-11-20): a recipe line
+  ending in `\` is joined with the lines it continues on; the recipe
+  prefixes (`@ -`, and `+` in Makefiles) are stripped once, from the start
+  of the joined command; in Makefiles `$$` becomes `$` and `$(VAR)` is
+  left as written. Only single simple commands are kept: a joined line
+  that starts with a shell keyword (if, for, while, ...) or has an
+  unquoted `;`, `&&` or `||` is dropped whole, not split (a real Makefile
+  tested 2026-11-18 gave 86 rows, ~60 of them shell fragments like `fi`).
+  `echo` lines are dropped too: progress messages, and merged with history
+  echoes they made a top row (`echo <STR> x11`, 2026-11-20). A row from a
+  recipe file is labelled "your Makefile" or "your justfile" instead of
+  "your notes" (history still comes first when a row is in both).
+  Splitting such lines into their commands was the other option; left for
+  shell scripts, where it is needed. The note is `just|make <recipe>` plus
+  the doc: a `## doc` on a Makefile target line, else the comment line
+  directly above the recipe (a blank line in between ends it, so section
+  dividers are not taken). Makefile pattern rules (`%.o:`) and special
+  targets (`.PHONY:`) are skipped. On the eval sets notes supply 5 benchmark answers;
   without them benchmark not shown goes 14 -> 16, the rest unchanged.
 - **Cleaning:** drop trivial commands (unless annotated), lines that look like
   secrets, `hint`/`hintdb` lines plus `HINTDB_IGNORE`, and one-off history
@@ -450,7 +467,8 @@ other words, so the limitation stays (README).
     number, time, question.
   - `--printed` (search): grep over past commands. One line per printed
     command line (not the `#` lines) whose text or note matches; the
-    status labels ("your history xN", "your notes", "model suggestion")
+    status labels ("your history xN", "your notes", "your Makefile",
+    "your justfile", "model suggestion")
     are not matched, or `search history` would match every row. A command
     printed by several lookups shows once, with the newest lookup's number,
     date and question and the count. Commands are never truncated.

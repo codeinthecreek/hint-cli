@@ -168,9 +168,69 @@ has "stats per source: one entry" "$out" "$fix/notes/cluster.md	1 entry, 1 only 
 if [ "$(grep -A99 '^man' <<<"$out" | grep -c ' only from this source')" = 4 ]; then
   ok "stats per source: one line per source file, after the kind and man lines"
 else bad "stats per source: one line per source file, after the kind and man lines" "$out"; fi
-line "stats per source: most entries first" "$out" 4 "$fix/history	31 entries, 30 only from this source"
+line "stats per source: most entries first" "$(grep -A1 "^man" <<<"$out")" 2 "$fix/history	31 entries, 30 only from this source"
 has "stats per source: home shown as ~" "$(HOME="$root" hintdb stats)" \
   "~/tests/fixtures/history	31 entries"
+
+out=$(HOME=/nonexistent hintdb stats --source "$fix/notes/k8s.md")
+line "stats --source: most uses first, other sources named" "$out" 1 \
+  "kubectl get nodes  [x2]  # Cordon and drain; Mark node unschedulable then evict pods.; also in $fix/history"
+if [ "$(wc -l <<<"$out")" = 3 ]; then ok "stats --source: one line per entry from the file"
+else bad "stats --source: one line per entry from the file" "$out"; fi
+out=$(hintdb stats --source "$fix/notes")
+has "stats --source: a directory lists its files' entries" "$out" "terraform destroy -auto-approve  [x1]  # just rebuild"
+out=$(hintdb stats --source "$fix/nonexistent" 2>&1)
+status "stats --source: unknown source fails" 1 $?
+has "stats --source: unknown source says so" "$out" "no entries from"
+
+echo "== recipe files (Makefiles, justfiles)"
+# A separate index, so the counts above stay as they are.
+: > "$tmp/empty_history"
+out=$(HINTDB_DB="$tmp/recipes.db" HINTDB_SOURCES="$tmp/recipes_sources" \
+  HISTFILE="$tmp/empty_history" hintdb add "$fix/recipes" 2>&1)
+has "recipes: directory walk finds Makefile, *.mk and justfile" "$out" "entries"
+rec=$(python3 - "$tmp/recipes.db" <<'EOF'
+import sqlite3, sys
+for display, dnote in sqlite3.connect(sys.argv[1]).execute(
+        "SELECT display, dnote FROM entries"):
+    print(f"{display}\t{dnote}")
+EOF
+)
+has "make: \\ lines joined, @ stripped, ## doc on the target line" "$rec" \
+  "docker run -d --restart=always --name registry -p 5000:5000 registry:2	make registry; start the local registry"
+lacks "make: a section divider is not the next recipe's note" "$rec" "Cluster"
+has "make: comment above the target as doc, - stripped, \$\$ -> \$" "$rec" \
+  "docker network inspect kind --format \"\$X\"	make net; create the cluster network"
+lacks "make: if-block joined and dropped whole" "$rec" "docker network create"
+lacks "make: no shell fragments" "$rec" "fi	"
+has "make: \$(VAR) kept, trailing comment as note" "$rec" \
+  "kubectl --context kind-\$(CLUSTER) get nodes -o wide	make nodes; all of them"
+lacks "make: && chain dropped" "$rec" "kubectl get pods"
+lacks "make: pattern rules skipped" "$rec" "cc -c"
+has "make: *.mk detected" "$rec" "shellcheck --severity=warning *.sh	make lint"
+has "just: \\ lines joined, continuation keeps its dashes" "$rec" \
+  "docker compose up -d --remove-orphans	just up"
+lacks "just: for loop dropped" "$rec" "kubectl apply"
+lacks "recipes: echo lines dropped (@echo and plain echo)" "$rec" "echo"
+rdb() { HINTDB_DB="$tmp/recipes.db" HINTDB_SOURCES="$tmp/recipes_sources" \
+  HISTFILE="$tmp/empty_history" hintdb "$@"; }
+out=$(rdb find -q "pack the docs folder" 2>&1)
+has "make: status label says your Makefile" "$out" \
+  "  # your Makefile: make backup; pack the docs folder"
+out=$(rdb find -q "unpack the docs backup" 2>&1)
+has "just: status label says your justfile" "$out" \
+  "  # your justfile: just restore; unpack the docs backup"
+has "stats: Makefile and justfile entries counted per kind" "$(rdb stats)" "make	5 entries"
+out=$(python3 - "$root/hintdb" <<'EOF'
+import importlib.machinery, sys
+h = importlib.machinery.SourceFileLoader("h", sys.argv[1]).load_module()
+for line in ("  # your Makefile: make up", "  # your justfile: just up"):
+    print(repr(h.status_note(line)))
+EOF
+)
+if [ "$out" = "'make up'
+'just up'" ]; then ok "search: Makefile and justfile labels do not match"
+else bad "search: Makefile and justfile labels do not match" "$out"; fi
 
 echo "== query (keyword search, debugging only)"
 out=$(hintdb query DNS lookup)
