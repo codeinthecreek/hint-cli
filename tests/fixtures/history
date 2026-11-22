@@ -58,6 +58,9 @@ ssh buildhost
 ssh buildhost
 ssh webhost
 ssh webhost
+xrandr --output HDMI-1 --mode 2560x1440
+xrandr --output HDMI-1 --mode 2560x1440
+xrandr --output HDMI-1 --mode 2560x1440
 fakedock compose up -d
 fakedock compose up -d
 fakedock compose down

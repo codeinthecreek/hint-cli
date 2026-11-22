@@ -1,7 +1,8 @@
 # DESIGN.md
 
-Design decisions for `hint` and `hintdb`. README.md covers usage and the
-architecture diagram; this file records what the system must do and why.
+Design decisions for `hint` and `hintdb`. README.md covers usage and
+docs/ARCHITECTURE.md how it works; this file records what the system must
+do and why.
 
 ## Purpose
 
@@ -303,7 +304,20 @@ installed: rows of a tool installed later show up. The hold-out is rebuilt
 from the snapshot's history comments, and each comment is hidden from
 history and notes text while tested (notes files may repeat it).
 
-Where the misses are (same run; no useful line printed): benchmark 10. The
+**The model and the search together** (2026-11-22, the same snapshot and
+recorded guesses, today's find): useful first / exact first with the
+question's words alone (no guesses), with the model's guesses alone (no
+search), and with both. Benchmark (77) 32/24, 46/14, 57/37; hold-out (82)
+45/24, 39/4, 50/24; questions (12) 6/4, 7/5, 9/7. Both is best on every set
+and measure, except hold-out exact, where it ties the words alone. The model
+alone names the right tool often but rarely the user's exact command; the
+words alone find the user's commands but miss questions worded unlike them.
+The guess mainly guides the search: of the 29 questions where it put the
+useful line first, the user's row was also printed in all 29, and in 21 it
+was not printed at all without the guess. The README's evidence line quotes
+the benchmark figures.
+
+Where the misses are (the 2026-11-18 run; no useful line printed): benchmark 10. The
 expected command is not in the index 4 (`iptables`, never used; two Slurm
 questions; the `psql` connect forms the eval accepts); it is not a
 candidate 2 (the model guessed the wrong tool and the row lacks the

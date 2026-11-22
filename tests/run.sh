@@ -23,7 +23,7 @@ mkdir -p "$tmp/bin"
 ln -s "$root/hint" "$tmp/bin/hint"
 ln -s "$root/hintdb" "$tmp/bin/hintdb"
 # Stub tools the fixtures use, so they count as installed here.
-for t in fakedock fakedock-compose FakeVM; do
+for t in fakedock fakedock-compose FakeVM xrandr; do
   printf '#!/bin/sh\n' > "$tmp/bin/$t"; chmod +x "$tmp/bin/$t"
 done
 export PATH="$tmp/bin:$PATH"
@@ -161,16 +161,16 @@ has "no rebuild when nothing changed" "$out" "entries up to date"
 out=$(hintdb stats)
 has "man index skips non-command and POSIX pages" "$out" "man	7 pages"
 out=$(HOME=/nonexistent hintdb stats)
-has "stats per source: history" "$out" "$fix/history	31 entries, 30 only from this source"
+has "stats per source: history" "$out" "$fix/history	32 entries, 31 only from this source"
 has "stats per source: a source sharing a row with history" "$out" \
   "$fix/notes/k8s.md	3 entries, 2 only from this source"
 has "stats per source: one entry" "$out" "$fix/notes/cluster.md	1 entry, 1 only from this source"
 if [ "$(grep -A99 '^man' <<<"$out" | grep -c ' only from this source')" = 4 ]; then
   ok "stats per source: one line per source file, after the kind and man lines"
 else bad "stats per source: one line per source file, after the kind and man lines" "$out"; fi
-line "stats per source: most entries first" "$(grep -A1 "^man" <<<"$out")" 2 "$fix/history	31 entries, 30 only from this source"
+line "stats per source: most entries first" "$(grep -A1 "^man" <<<"$out")" 2 "$fix/history	32 entries, 31 only from this source"
 has "stats per source: home shown as ~" "$(HOME="$root" hintdb stats)" \
-  "~/tests/fixtures/history	31 entries"
+  "~/tests/fixtures/history	32 entries"
 
 out=$(HOME=/nonexistent hintdb stats --source "$fix/notes/k8s.md")
 line "stats --source: most uses first, other sources named" "$out" 1 \
@@ -509,6 +509,17 @@ has "HINT_DEBUG: find scores" "$err" "score   bm25 tool flags gwords  uses   com
 out=$(hint short dns lookup 2>&1)
 status "empty reply: the question's own words are still looked up (exit 0)" 0 $?
 has "empty reply: the user's row found by the question's words" "$out" "dig +short <HOST>"
+
+# The guess bridges the question's words and the user's: no question word is
+# on the user's xrandr row, so only the guessed tool finds it.
+out=$(hint how do I set the screen resolution 2>&1)
+lacks "no guess: a row with none of the question's words is not found" "$out" "xrandr"
+printf '%s\n' 'xrandr -s 1920x1080' > "$reply"
+out=$(hint how do I set the screen resolution 2>&1)
+has "guessed tool finds the user's row with none of the question's words" "$out" \
+  "xrandr --output HDMI-1 --mode 2560x1440"
+has "the guess is shown as a model suggestion" "$out" "xrandr -s 1920x1080"
+: > "$reply"
 
 out=$(hint zzqq frobnicate 2>&1)
 status "empty reply, nothing found: exit 1" 1 $?
