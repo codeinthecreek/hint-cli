@@ -36,9 +36,10 @@ things the other finds:
 | `how do I set the screen resolution` | nothing: your `xrandr` line has none of these words | `xrandr -s 1920x1080`: right tool, not your screen's settings | your `xrandr --output HDMI-1 --mode 2560x1440`, under the model's guess |
 | something you have never run | nothing | a suggestion | the suggestion, labelled as one |
 
-On 77 test questions from real use, the first line printed was useful for
-32 with the history alone, 46 with the model alone and 57 with both; it was
-the exact command the user had run for 24, 14 and 37.
+Measured on the author's own history (77 questions): the first line printed
+was useful for 32 with the history alone, 46 with the model alone and 57 with
+both; it was the exact command for 24, 14 and 37. [eval/](eval/README.md) has
+scripts to measure hint on your own questions.
 
 ## How it works
 
