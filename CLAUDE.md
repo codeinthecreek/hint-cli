@@ -45,7 +45,7 @@ them only with agreement. README.md covers usage and architecture.
   instructions.
 - Before handing over a change, run `tests/run.sh` (it also checks syntax,
   ASCII and that both scripts are executable), and show the affected
-  `hintdb match --debug` output.
+  `hintdb find --debug` output (what `HINT_DEBUG=1 hint ...` prints).
 - The user tests locally on the real machine with real history. Ask for
   `HINT_DEBUG=1` output when a result looks wrong, and diagnose from the score
   table before changing anything.
