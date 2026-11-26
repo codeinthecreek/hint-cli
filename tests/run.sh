@@ -563,64 +563,79 @@ status "Ollama error: exit 1" 1 $?
 has "Ollama error: shows Ollama's message" "$out" \
   "returned an error (model nosuch): model \"nosuch\" not found, try pulling it first"
 
-echo "== hint history (query log)"
+echo "== hint history and hint grep (query log)"
 flog="$fix/queries.jsonl"   # 12 synthetic entries on lines 1-3, 5-13; line 4 is damaged
 H() { HINTDB_LOG="$flog" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }   # no model reachable
 
+# history: lists, like bash history.
 out=$(H history 2>&1)
 status "history alone: exit 0" 0 $?
 has "history alone: the last 10 lookups, like bash history" "$(wc -l <<<"$out")" "10"
 line "history alone: newest last" "$out" 10 "   13  2026-11-12 09:00  remove old host key"
 lacks "history alone: damaged log line skipped" "$out" "not json"
+out=$(H history 2 2>&1)
+status "history N: exit 0" 0 $?
+has "history N: last N lookups" "$(wc -l <<<"$out")" "2"
+line "history N: oldest first, newest last" "$out" 2 "   13  2026-11-12 09:00  remove old host key"
+has "history N: more than there are" "$(H history 50 2>&1 | wc -l)" "12"
+out=$(H history ssh 2>&1)
+status "history WORD: not a search, exit 2" 2 $?
+has "history WORD: points to grep" "$out" 'hint: history takes a number; to find past lookups with "ssh":  hint grep ssh'
+for a in "-n 3" "-c" "--last 3" "--bogus"; do
+  H history $a >/dev/null 2>&1
+  status "history with an option it does not take ($a): exit 2" 2 $?
+done
+out=$(HINTDB_LOG="$tmp/none.jsonl" hint history 2>&1)
+status "history, no log yet: exit 1" 1 $?
+has "history, no log yet: says so" "$out" "hint: no past lookups yet"
 out=$(H help 2>&1)
-has "usage: history form" "$out" "hint history [OPTIONS] [WORD|N]"
+has "usage: history" "$out" "hint history [N]"
 has "usage: --show" "$out" "hint history --show NUM"
-has "usage: says where options may go" "$out" "OPTIONS, anywhere after history:"
-has "usage: how to give several words" "$out" 'For several words, quote them:  hint history "ssh key"'
+has "usage: --delete" "$out" "hint history --delete NUM[,NUM|NUM-NUM]..."
+has "usage: grep" "$out" "hint grep [-c] WORD"
+has "usage: how to give several words" "$out" 'For several words, quote them:  hint grep "ssh key"'
 has "usage: says a second unquoted word makes a question" "$out" \
   "Unquoted, a second word makes the line a question for the model instead:"
 lacks "usage: no search form" "$out" "hint search"
-lacks "usage: no -H / -S" "$out" "-H, --history"
+lacks "usage: no -n option" "$out" "--last"
 
-# history WORD: the lookups whose question or printed commands contain it.
-out=$(H history registry 2>&1)
-status "history WORD: exit 0 without a model" 0 $?
-line "history WORD: number, time, question" "$out" 1 "    1  2026-11-01 09:00  start the local registry"
-out=$(H history ssh 2>&1)
-has "history: case-insensitive" "$out" "    2  2026-11-02 09:00  SSH tunnel to postgres"
-has "history: numbers skip the damaged line" "$out" "   12  2026-11-11 09:00  ssh with a key"
-has "history: a lookup found by a command it printed" "$out" "   13  2026-11-12 09:00  remove old host key"
-has "history: the matching command shown under its lookup" "$out" \
+# grep: the lookups whose question or printed commands contain the word.
+out=$(H grep registry 2>&1)
+status "grep WORD: exit 0 without a model" 0 $?
+line "grep WORD: number, time, question" "$out" 1 "    1  2026-11-01 09:00  start the local registry"
+out=$(H grep ssh 2>&1)
+has "grep: case-insensitive" "$out" "    2  2026-11-02 09:00  SSH tunnel to postgres"
+has "grep: numbers skip the damaged line" "$out" "   12  2026-11-11 09:00  ssh with a key"
+has "grep: a lookup found by a command it printed" "$out" "   13  2026-11-12 09:00  remove old host key"
+has "grep: the matching command shown under its lookup" "$out" \
   "$(printf '%s\n' '   13  2026-11-12 09:00  remove old host key' '         ssh-keygen -R oldhost.example.org')"
-has "history: three lookups, each with its matching command" "$(grep -c '^ \{9\}ssh' <<<"$out")" "3"
-has "history: matches inside words (substring)" "$(H history frob 2>&1)" "zzqq frobnicate"
-out=$(H history keygen 2>&1)
-status "history: a word only in a printed command finds the lookup (exit 0)" 0 $?
-line "history: question line, then the command" "$out" 2 "         ssh-keygen -R oldhost.example.org"
-out=$(H history registry-up 2>&1)
-has "history: matches a command's note" "$out" "         docker run -d -p 5000:5000 registry:3"
-lacks "history: a match in the question only shows no command" "$(H history frobnicate 2>&1)" "         "
-out=$(H history history 2>&1)
-status "history: status labels (your history, your notes) do not match" 1 $?
-out=$(H history zzzz 2>&1)
-status "history WORD: no match: exit 1" 1 $?
-has "history WORD: no match says how to ask instead" "$out" \
+has "grep: three lookups, each with its matching command" "$(grep -c '^ \{9\}ssh' <<<"$out")" "3"
+has "grep: matches inside words (substring)" "$(H grep frob 2>&1)" "zzqq frobnicate"
+out=$(H grep keygen 2>&1)
+status "grep: a word only in a printed command finds the lookup (exit 0)" 0 $?
+line "grep: question line, then the command" "$out" 2 "         ssh-keygen -R oldhost.example.org"
+has "grep: a number is a word" "$(H grep 5432 2>&1)" "         ssh -N -L 5432:localhost:5432 db.example.org"
+has "grep: matches a command's note" "$(H grep registry-up 2>&1)" "         docker run -d -p 5000:5000 registry:3"
+lacks "grep: a match in the question only shows no command" "$(H grep frobnicate 2>&1)" "         "
+out=$(H grep history 2>&1)
+status "grep: status labels (your history, your notes) do not match" 1 $?
+out=$(H grep zzzz 2>&1)
+status "grep: no match: exit 1" 1 $?
+has "grep: no match says how to ask instead" "$out" \
   'hint: no past lookups contain "zzzz"; to ask it as a question, add a word'
+has "grep: every match, not only the last 10" \
+  "$(H grep 2026 2>&1 | grep -c '^ *[0-9]')" "0"
+has "grep: all lookups when all match" "$(H grep e 2>&1 | grep -c '^ \{3,4\}[0-9]')" "12"
 dlog="$tmp/dup.jsonl"
 printf '%s\n' \
   '{"time": "2026-11-01T09:00:00", "query": "list containers", "printed": ["docker ps -a", "  # your history x9"]}' \
   '{"time": "2026-11-02T09:00:00", "query": "a long command", "printed": ["rsync -e \"ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes\" --archive --delete u@build2.example.org:/srv/data/ /home/user/backup/build2/", "  # your history x2"]}' \
   '{"time": "2026-11-03T09:00:00", "query": "show all containers", "printed": ["docker ps -a", "  # model suggestion", "docker ps -a", "  # model suggestion"]}' > "$dlog"
-out=$(HINTDB_LOG="$dlog" hint history docker 2>&1)
-has "history: a command is shown under each lookup that printed it" "$(grep -c 'docker ps -a' <<<"$out")" "2"
-line "history: printed twice in one lookup, shown once" "$out" 4 "         docker ps -a"
-has "history: long commands not truncated" "$(HINTDB_LOG="$dlog" hint history rsync 2>&1)" \
+out=$(HINTDB_LOG="$dlog" hint grep docker 2>&1)
+has "grep: a command is shown under each lookup that printed it" "$(grep -c 'docker ps -a' <<<"$out")" "2"
+line "grep: printed twice in one lookup, shown once" "$out" 4 "         docker ps -a"
+has "grep: long commands not truncated" "$(HINTDB_LOG="$dlog" hint grep rsync 2>&1)" \
   "/home/user/backup/build2/"
-
-out=$(H history 2 2>&1)
-status "history N: exit 0" 0 $?
-has "history N: last N lookups" "$(wc -l <<<"$out")" "2"
-line "history N: oldest first, newest last" "$out" 2 "   13  2026-11-12 09:00  remove old host key"
 
 # --show: one full entry.
 out=$(H history --show 2 2>&1)
@@ -630,13 +645,12 @@ line "--show NUM: printed lines indented" "$out" 2 "  ssh -N -L 5432:localhost:5
 line "--show NUM: status lines as shown" "$out" 3 "    # your history x1: tunnel to postgres"
 has "-s NUM" "$(H history -s 1 2>&1)" "  docker run -d -p 5000:5000 registry:3"
 has "--show=NUM" "$(H history --show=1 2>&1)" "start the local registry"
-has "usage: --show and --delete stand alone" "$(H help 2>&1)" "On its own (no WORD, -n or -c):"
 has "--show: nothing found shown" "$(H history --show 3 2>&1)" "  (nothing found)"
 out=$(H history --show 4 2>&1)
 status "--show on a damaged line: exit 1" 1 $?
 has "--show: no such entry" "$out" "hintdb: no entry 4 in the query log"
 has "--show: past the end" "$(H history --show 99 2>&1)" "hintdb: no entry 99 in the query log"
-for a in "ssh --show 2" "--show 2 -c" "--show 2 -n 3" "5 --show 2" "--show" "--show x"; do
+for a in "ssh --show 2" "--show 2 -c" "5 --show 2" "--show" "--show x"; do
   H history $a >/dev/null 2>&1
   status "--show with other things or no number ($a): exit 2" 2 $?
 done
@@ -663,11 +677,11 @@ D() { HINTDB_LOG="$tmp/del.jsonl" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }
 out=$(D history -d 2 2>&1)
 status "--delete NUM: exit 0" 0 $?
 line "--delete NUM: says what was deleted" "$out" 1 "deleted     2  2026-11-02 09:00  SSH tunnel to postgres"
-lacks "--delete NUM: gone from history" "$(D history -n 20 2>&1)" "SSH tunnel to postgres"
-has "--delete: other entries keep their numbers" "$(D history -n 20 2>&1)" "   12  2026-11-11 09:00  ssh with a key"
+lacks "--delete NUM: gone from history" "$(D history 20 2>&1)" "SSH tunnel to postgres"
+has "--delete: other entries keep their numbers" "$(D history 20 2>&1)" "   12  2026-11-11 09:00  ssh with a key"
 has "--delete: the file keeps its line count" "$(wc -l <"$tmp/del.jsonl")" "13"
 has "--delete: --show of a deleted entry" "$(D history --show 2 2>&1)" "hintdb: no entry 2 in the query log"
-lacks "--delete: its commands are gone too" "$(D history postgres 2>&1)" "db.example.org"
+lacks "--delete: its commands are gone too" "$(D grep postgres 2>&1)" "db.example.org"
 out=$(D history -d 2 2>&1)
 status "--delete of a deleted entry: exit 1" 1 $?
 has "--delete of a deleted entry: message" "$out" "hintdb: no entry 2 in the query log; nothing deleted"
@@ -682,17 +696,16 @@ has "--delete list and range: all deleted" "$(grep -c '^deleted' <<<"$out")" "4"
 out=$(D history --delete 3-5 2>&1)
 has "--delete range: only the entries in it (4 damaged, 5 gone)" "$out" "deleted     3"
 has "--delete range: one entry deleted" "$(grep -c '^deleted' <<<"$out")" "1"
-has "--delete: the rest" "$(D history -n 20 2>&1 | wc -l)" "6"
-for a in "history ssh -d 8" "history -d 8 -c" "history -d 8 -n 2" "history -d 8 -s 8" \
+has "--delete: the rest" "$(D history 20 2>&1 | wc -l)" "6"
+for a in "history ssh -d 8" "history 2 -d 8" "history -d 8 -c" "history -d 8 -s 8" \
          "history -d" "history -d x" "history -d 8,,9"; do
   D $a >/dev/null 2>&1
   status "--delete with other things, or no or bad NUM ($a): exit 2" 2 $?
 done
-has "--delete with nothing changed by the refused calls" "$(D history -n 20 2>&1 | wc -l)" "6"
-has "usage: --delete" "$(H help 2>&1)" "-d, --delete NUM[,NUM|NUM-NUM]..."
+has "--delete with nothing changed by the refused calls" "$(D history 20 2>&1 | wc -l)" "6"
 HINTDB_LOG="$tmp/del.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
 has "a lookup after a delete is appended as the next line" \
-  "$(D history -n 1 2>&1)" "   14  "
+  "$(D history 1 2>&1)" "   14  "
 if command -v flock >/dev/null; then
   flock "$tmp/del.jsonl" sleep 1 &
   lock_pid=$!
@@ -703,48 +716,25 @@ if command -v flock >/dev/null; then
   wait "$lock_pid"
   if [ $(( (t1 - t0) / 1000000 )) -ge 500 ]; then ok "a lookup waits for the log lock instead of writing during a delete"
   else bad "a lookup waits for the log lock instead of writing during a delete" "waited $(( (t1 - t0) / 1000000 )) ms"; fi
-  has "the lookup that waited is in the log" "$(D history -n 1 2>&1)" "   15  "
+  has "the lookup that waited is in the log" "$(D history 1 2>&1)" "   15  "
 fi
 
-# Several words: quoted, one argument; all of them must match.
-out=$(H history "ssh key" 2>&1)
-status "history \"two words\": a log lookup, exit 0" 0 $?
-has "history \"two words\": all words, anywhere in the question" "$out" "ssh with a key"
-has "history \"two words\": or in a command" "$out" "         ssh -i ~/.ssh/key user@build2.example.org"
-lacks "history \"two words\": not a lookup with only one of them" "$out" "SSH tunnel to postgres"
-has "history -n N" "$(H history -n 3 2>&1 | wc -l)" "3"
-has "history --last N" "$(H history --last 3 2>&1 | wc -l)" "3"
-has "history --last=N WORD" "$(H history --last=1 key 2>&1)" "remove old host key"
-out=$(H history --last 0 2>&1)
-status "--last 0: exit 2" 2 $?
-has "--last 0: message" "$out" "hint: --last needs a number of 1 or more"
-out=$(H history --bogus 2>&1)
-status "unknown option: usage, exit 2" 2 $?
-has "--count: counts lookups" "$(H history -c ssh 2>&1)" "3"
-out=$(H history --count zzzz 2>&1)
-status "--count with no match: exit 1" 1 $?
-line "--count with no match: prints 0 only" "$out" 1 "0"
-has "--count: ignores --last" "$(H history -c -n 2 2>&1)" "12"
-out=$(HINTDB_LOG="$tmp/none.jsonl" hint history 3 2>&1)
-has "no log yet: says so" "$out" "hint: no past lookups yet"
-hint -H ssh >/dev/null 2>&1
-has "-H is no longer an option: a question, like any first word" \
-  "$(jq -r '.messages[-1].content' <"$tmp/request")" "-H ssh"
-
-# One plain word at most, options anywhere: still a log lookup.
-has "history WORD --count" "$(H history ssh --count 2>&1)" "3"
-has "history --count WORD" "$(H history --count ssh 2>&1)" "3"
-out=$(H history ssh -n 1 2>&1)
-has "history WORD -n N: one lookup" "$(grep -c '^ *[0-9]' <<<"$out")" "1"
-has "history WORD -n N: the last match" "$out" "remove old host key"
-has "history --count alone: all lookups" "$(H history --count 2>&1)" "12"
-has "history --last N alone" "$(H history --last 2 2>&1 | wc -l)" "2"
-has "history N --count: the number is ignored" "$(H history 20 --count 2>&1)" "12"
-out=$(H history ssh -x 2>&1)
-status "history with an unknown option: usage, exit 2" 2 $?
-has "history with an unknown option: usage shown" "$out" "OPTIONS, anywhere after"
-out=$(H history -n 2>&1)
-status "history -n without a number: usage" 2 $?
+# grep: several words quoted, one argument; all of them must match.
+out=$(H grep "ssh key" 2>&1)
+status "grep \"two words\": exit 0" 0 $?
+has "grep \"two words\": all words, anywhere in the question" "$out" "ssh with a key"
+has "grep \"two words\": or in a command" "$out" "         ssh -i ~/.ssh/key user@build2.example.org"
+lacks "grep \"two words\": not a lookup with only one of them" "$out" "SSH tunnel to postgres"
+has "grep -c: counts lookups" "$(H grep -c ssh 2>&1)" "3"
+has "grep WORD -c: option after the word" "$(H grep ssh --count 2>&1)" "3"
+out=$(H grep --count zzzz 2>&1)
+status "grep -c with no match: exit 1" 1 $?
+line "grep -c with no match: prints 0 only" "$out" 1 "0"
+for a in "" "-c" "--bogus ssh"; do
+  H grep $a >/dev/null 2>&1
+  status "grep without a word, or with an unknown option ($a): usage, exit 2" 2 $?
+done
+has "grep with an unknown option: usage shown" "$(H grep ssh -x 2>&1)" "usage: hint"
 
 printf '%s\n' 'fc -ln -10' > "$reply"
 hint history postgres docker >/dev/null 2>&1
@@ -757,12 +747,18 @@ out=$(hint history without duplicates 2>&1)
 has "history + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
   "history without duplicates"
 lacks "history + more words: no usage" "$out" "usage: hint"
+hint grep recursively for a word >/dev/null 2>&1
+has "grep + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "grep recursively for a word"
 hint search docker >/dev/null 2>&1
-has "search is no longer a command: a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+has "search is not a command: a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
   "search docker"
+hint -H ssh >/dev/null 2>&1
+has "-H is not an option: a question, like any first word" \
+  "$(jq -r '.messages[-1].content' <"$tmp/request")" "-H ssh"
 : > "$HINTDB_LOG"
 hint short dns lookup >/dev/null 2>&1
-has "a lookup can be found again with history" "$(hint history dns 2>&1)" "short dns lookup"
+has "a lookup can be found again with grep" "$(hint grep dns 2>&1)" "short dns lookup"
 
 echo "== hint remember"
 # Its own history file and log, so the mtime check and the lines are known.

@@ -260,17 +260,22 @@ them while other terminals are open:
 Every lookup is kept in a local query log, and these commands read it
 without asking the model.
 
-The last 10 lookups, like bash `history`:
+The last 10 lookups, like bash `history`; add a number for more:
 
 ```bash
 hint history
 ```
 
+```bash
+hint history 30
+```
+
 Past lookups containing a word, in the question or in a command they
-showed you. A command that matched is shown under its lookup:
+showed you, like `history | grep` in bash. A command that matched is shown
+under its lookup:
 
 ```bash
-hint history rsync
+hint grep rsync
 ```
 
 The full answer of lookup 57, with the files each of your rows came from:
@@ -285,12 +290,14 @@ Delete lookups you didn't mean, like bash `history -d`:
 hint history --delete 41,42
 ```
 
-`history` takes at most one word. With two or more words the line is a
-question for the model, so `hint history without duplicates` is asked as
-usual. To look for several words, quote them; each word must match:
+`grep` takes one word, and a number is a word: `hint grep 5432` finds the
+lookup that showed a command with port 5432. With two or more words the
+line is a question for the model, so `hint grep recursively for a word` is
+asked as usual. To look for several words, quote them; each word must
+match:
 
 ```bash
-hint history "ssh key"
+hint grep "ssh key"
 ```
 
 ## Configuration
@@ -331,17 +338,15 @@ commands from it.
 
 | Form or option | Meaning |
 |---|---|
-| `history [WORD\|N]` | past lookups: the last 10, those whose question or commands contain WORD, or the last N |
-| `-n`, `--last N` | only the last N matching lookups (default 10) |
-| `-c`, `--count` | print the number of matching lookups instead |
-| `-s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
-| `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
+| `history [N]` | your last 10 lookups, or the last N |
+| `history -s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
+| `history -d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
+| `grep [-c] WORD` | past lookups whose question or commands contain WORD; `-c`: just the number |
 | `remember [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
 | `forget [TOOL]` | mark the first command after your last question, or the first TOOL command, as wrong, so hint never shows it |
 
-`-n`, `-c`, `--show` and `--delete` work after `history`; `--show` and
-`--delete` on their own. `hint help`
-prints the usage; `hint help me ...` is a question.
+`--show` and `--delete` stand alone. `hint help` prints the usage; `hint
+help me ...` is a question.
 
 ### hintdb commands
 
@@ -355,7 +360,7 @@ prints the usage; `hint help me ...` is a question.
 | `hintdb stats` | rows per kind and per source file (and how many come only from that file) |
 | `hintdb stats --source PATH` | the rows from one source file or directory, most used first |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
-| `hintdb log ...` | read and edit the query log (used by `hint history`) |
+| `hintdb log ...` | read and edit the query log (used by `hint history` and `hint grep`) |
 | `hintdb remember [TOOL]` | the last question and the command that answers it (used by `hint remember`) |
 | `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND, and where it is marked |
 | `hintdb forget --save [--reason R] -- COMMAND` | mark COMMAND as wrong (used by `hint forget`) |

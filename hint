@@ -2,7 +2,8 @@
 # hint - natural-language command lookup.
 #
 #   hint how do I create an ssh tunnel
-#   hint history tunnel        past lookups whose question or commands contain "tunnel"
+#   hint history               your last 10 lookups
+#   hint grep tunnel           past lookups whose question or commands contain "tunnel"
 #   hint remember [TOOL]         save the command that answered the last question
 #   hint forget [TOOL]         mark a wrong command, so hint never shows it
 #
@@ -27,11 +28,17 @@ set -o pipefail
 usage() {
   cat >&2 <<'EOF'
 usage: hint <what you want to do>
-       hint history [OPTIONS] [WORD|N]
-                                       past lookups: the last 10, those whose
-                                       question or commands contain WORD, or
-                                       the last N
-       hint history --show NUM         the full answer of lookup NUM
+       hint history [N]                your last 10 lookups, or the last N,
+                                       like bash history
+       hint history --show NUM         the full answer of lookup NUM, with
+                                       each of your rows' source files
+       hint history --delete NUM[,NUM|NUM-NUM]...
+                                       delete lookups from the log; the others
+                                       keep their numbers, and nothing is
+                                       deleted if a NUM is not there
+       hint grep [-c] WORD             past lookups whose question or commands
+                                       contain WORD, with the commands that
+                                       matched; -c: just the number
        hint remember [TOOL]            save your last command (or your last
                                        TOOL command) as the answer to the
                                        last question, after you confirm it
@@ -39,85 +46,75 @@ usage: hint <what you want to do>
                                        question (or the first TOOL command)
                                        WRONG, so hint never shows it again
        hint -h, --help                 this help
-OPTIONS, anywhere after history:
-  -n, --last N     only the last N matching lookups (default 10)
-  -c, --count      print the number of matching lookups instead
-On its own (no WORD, -n or -c):
-  -s, --show NUM   the full answer of lookup NUM (the number that
-                   history prints), with each of your rows' source files
-  -d, --delete NUM[,NUM|NUM-NUM]...
-                   delete lookups from the log; the others keep their
-                   numbers, and nothing is deleted if a NUM is not there
-For several words, quote them:  hint history "ssh key"
+For several words, quote them:  hint grep "ssh key"
 Unquoted, a second word makes the line a question for the model instead:
-  hint history without duplicates
+  hint grep recursively for a word
 An unknown option prints this help.
 EOF
   exit 2
 }
 
-# past ARGS...   past lookups in the query log (hintdb log): those whose
-# question or printed commands contain WORD; --show, --delete.
-past() {
-  local count= show= del= last= rc
-  local opts=() words=()
+# need_number OPTION VALUE   VALUE must be an entry number, or exit 2.
+need_number() {
+  [[ $2 =~ ^[1-9][0-9]*$ ]] || { echo "hint: $1 needs an entry number" >&2; exit 2; }
+}
+
+# history [N] | history --show NUM | history --delete NUMS
+# List past lookups like bash `history`: the last 10, or the last N.
+# Finding them by a word is `hint grep`.
+history_cmd() {
+  local show= del= last=
   while [ $# -gt 0 ]; do
     case "$1" in
-      -n|--last|--last=*)
-        local n
-        if [ "$1" = -n ] || [ "$1" = --last ]; then
-          [ $# -ge 2 ] || usage
-          n=$2; shift
-        else
-          n=${1#--last=}
-        fi
-        [[ $n =~ ^[1-9][0-9]*$ ]] || { echo "hint: --last needs a number of 1 or more" >&2; exit 2; }
-        opts+=(--last "$n"); last=1 ;;
-      -s|--show|--show=*)
-        if [ "$1" = -s ] || [ "$1" = --show ]; then
-          [ $# -ge 2 ] || usage
-          show=$2; shift
-        else
-          show=${1#--show=}
-        fi
-        [[ $show =~ ^[1-9][0-9]*$ ]] || { echo "hint: --show needs an entry number" >&2; exit 2; } ;;
-      -d|--delete|--delete=*)
-        if [ "$1" = -d ] || [ "$1" = --delete ]; then
-          [ $# -ge 2 ] || usage
-          del=$2; shift
-        else
-          del=${1#--delete=}
-        fi
-        [[ $del =~ ^[1-9][0-9]*(-[1-9][0-9]*)?(,[1-9][0-9]*(-[1-9][0-9]*)?)*$ ]] || {
-          echo "hint: --delete needs entry numbers: N, N,M or N-M" >&2; exit 2; } ;;
-      -c|--count) opts+=(--count); count=1 ;;
+      -s|--show) [ $# -ge 2 ] || usage; show=$2; shift; need_number --show "$show" ;;
+      --show=*) show=${1#--show=}; need_number --show "$show" ;;
+      -d|--delete) [ $# -ge 2 ] || usage; del=$2; shift ;;
+      --delete=*) del=${1#--delete=} ;;
+      -?*) usage ;;
+      *) [ -z "$last" ] || usage; last=$1 ;;
+    esac
+    shift
+  done
+  command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
+  if [ -n "$del" ]; then
+    [[ $del =~ ^[1-9][0-9]*(-[1-9][0-9]*)?(,[1-9][0-9]*(-[1-9][0-9]*)?)*$ ]] || {
+      echo "hint: --delete needs entry numbers: N, N,M or N-M" >&2; exit 2; }
+  fi
+  # --show and --delete stand alone.
+  if [ -n "$show$del" ]; then
+    [ -z "$last" ] && [ -z "$show" -o -z "$del" ] || usage
+    [ -n "$show" ] && exec hintdb log --show "$show"
+    exec hintdb log --delete "$del"
+  fi
+  if [ -n "$last" ] && ! [[ $last =~ ^[1-9][0-9]*$ ]]; then
+    echo "hint: history takes a number; to find past lookups with \"$last\":  hint grep $last" >&2
+    exit 2
+  fi
+  hintdb log --last "${last:-10}" || { echo "hint: no past lookups yet" >&2; exit 1; }
+}
+
+# grep [-c] WORD   past lookups whose question or printed commands contain
+# WORD (a quoted phrase: all its words), each with the commands that matched.
+grep_cmd() {
+  local count= words=() rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -c|--count) count=1 ;;
       --) shift; words+=("$@"); break ;;
       -?*) usage ;;
       *) words+=("$1") ;;
     esac
     shift
   done
+  [ ${#words[@]} -eq 1 ] || usage
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
-  # --show and --delete stand alone: no words, --last, --count or each other.
-  if [ -n "$show$del" ]; then
-    [ ${#words[@]} -eq 0 ] && [ -z "$count$last" ] && [ -z "$show" -o -z "$del" ] || usage
-    [ -n "$show" ] && exec hintdb log --show "$show"
-    exec hintdb log --delete "$del"
+  if [ -n "$count" ]; then
+    hintdb log --count -- "${words[@]}"
+    exit $?
   fi
-  # `hint history 20`: a lone number is the last N, not a word.
-  if [ ${#words[@]} -eq 1 ] && [[ ${words[0]} =~ ^[1-9][0-9]*$ ]]; then
-    [ -z "$count" ] && opts+=(--last "${words[0]}")
-    words=()
-  fi
-  hintdb log "${opts[@]}" -- "${words[@]}"
+  hintdb log --all -- "${words[@]}"
   rc=$?
-  if [ "$rc" -eq 1 ] && [ -z "$count" ]; then
-    if [ ${#words[@]} -eq 0 ]; then
-      echo "hint: no past lookups yet" >&2
-    else
-      echo "hint: no past lookups contain \"${words[*]}\"; to ask it as a question, add a word" >&2
-    fi
-  fi
+  [ "$rc" -eq 1 ] && echo "hint: no past lookups contain \"${words[*]}\"; to ask it as a question, add a word" >&2
   exit "$rc"
 }
 
@@ -222,20 +219,23 @@ forget() {
 [ $# -gt 0 ] || usage
 case "$1" in
   -h|--help) usage ;;
-  # history alone: the last 10 lookups. At most one plain word (a quoted
-  # phrase is one) plus options: a log lookup. Two or more plain words: a
-  # question (falls through).
-  history)
+  # history: at most one plain word (N) plus its options. grep: one WORD
+  # (a quoted phrase is one) plus -c. Two or more plain words: a question
+  # (falls through), so "history without duplicates" and "grep recursively
+  # for a word" are asked as usual.
+  history|grep)
     plain=0 skip=
     for a in "${@:2}"; do
       if [ -n "$skip" ]; then skip=; continue; fi
       case "$a" in
-        -n|--last|-s|--show|-d|--delete) skip=1 ;;
+        -s|--show|-d|--delete) skip=1 ;;
         -?*) ;;
         *) plain=$((plain + 1)) ;;
       esac
     done
-    [ "$plain" -le 1 ] && past "${@:2}" ;;
+    if [ "$plain" -le 1 ]; then
+      op=$1; shift; "${op}_cmd" "$@"; exit $?
+    fi ;;
   # remember or forget alone or with one TOOL. Two or more words: a question
   # ("remember my ssh key passphrase", "forget a wifi network").
   remember|forget)

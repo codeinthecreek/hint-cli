@@ -21,7 +21,7 @@ DB, because dedup is global across sources.
                                                      source file, for checking dedup
   hintdb stats --source PATH                         the entries from one source
                                                      file (or a directory's files)
-  hintdb log [-n N] [-c] [WORD...]                   past lookups whose question or
+  hintdb log [-n N | --all] [-c] [WORD...]           past lookups whose question or
                                                      printed commands contain all WORDs
   hintdb log --show N                                the full entry number N
   hintdb log --delete N[,N|N-M]...                   delete entries from the log
@@ -2035,6 +2035,7 @@ def main():
     fd.add_argument("guesses", nargs="*", help="the model's guessed commands")
     lg = sub.add_parser("log")
     lg.add_argument("-n", "--last", type=int, default=10, help="last N matching lookups")
+    lg.add_argument("--all", action="store_true", help="every matching lookup (for hint grep)")
     lg.add_argument("-c", "--count", action="store_true", help="print the number of matching lookups")
     lg.add_argument("-s", "--show", type=int, metavar="N", help="the full entry number N")
     lg.add_argument("-d", "--delete", metavar="N[,N|N-M]...",
@@ -2186,7 +2187,7 @@ def main():
         if args.count:
             print(len(entries))
         else:
-            for entry in entries[-args.last:]:
+            for entry in (entries if args.all else entries[-args.last:]):
                 print("\n".join(entry))
         sys.exit(0 if entries else 1)
     elif args.op == "query":

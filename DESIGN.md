@@ -529,7 +529,8 @@ other words, so the limitation stays (README).
   several terminals do not interleave. A failed write only warns. No
   rotation for now: one line per lookup stays small.
 - **Read by `hintdb log`**, the last N matching lookups (`--last`,
-  default 10), oldest first like `history | tail`; `--count` prints the
+  default 10; `--all` for `hint grep`), oldest first like `history |
+  tail`; `--count` prints the
   number of lookups instead. Matching: every word (a quoted phrase is its
   words), case-insensitive plain substrings. Exit 1 when nothing matches,
   like grep. No model call.
@@ -547,7 +548,9 @@ other words, so the limitation stays (README).
     search, and the two forms plus `-H`/`-S` flags for several words were
     more to learn than the task needs: recall starts with the command, and
     finding a past lookup by anything in it covers both (the author:
-    "simple is best"). The per-command count was given up.
+    "simple is best"). The per-command count was given up. The same day
+    the matching moved from `hint history WORD` to `hint grep WORD`, and
+    `history` went back to only listing (see "`hint` forms").
   - `--show N`: the full entry N, as printed then, with `# from <files>`
     (home as `~`) after each of the user's rows, from the log's `rows`:
     bad rows are better fixed in their source than hidden, and this is
@@ -566,24 +569,35 @@ other words, so the limitation stays (README).
   2026-11-20: printing every answer in full made the list unusable within
   a day, so lists are one line per item and the full answer is asked for
   by number.
-- **`hint` forms.** `hint history [OPTIONS] [WORD|N]` (a lone positive
-  number is the last N) is a command when at most one plain word follows
-  (a quoted phrase is one), with the options `-n/--last N`, `-c/--count`,
-  or `-s/--show NUM` or `-d/--delete NUMS` (alone) anywhere. `history`
-  alone lists the last 10 lookups, like bash `history`. Two or more plain
-  words make the line a question, and an unknown option with at most one
-  plain word prints the usage. `help` is a command only alone. Several
-  words are quoted (the `-H`/`-S` flags for them were dropped 2026-11-26;
-  `hint -H ...` and `hint search ...` are now questions, like any other
-  first word). Agreed 2026-11-20: a reserved word
-  that swallowed questions would fail silently, giving the wrong kind of
-  answer, so the word forms are kept to one plain word (a real question
-  leads with words, "what does history -c do"); a miss there says how to
-  ask it as a question instead. A known option marks a command: `hint
-  history postgres --count` was first asked as a question, which the author
-  found confusing. `hint history` alone first printed the usage too; once
-  lists were one line per lookup, the author wanted it to list like bash
-  (2026-11-20). `hint help` is the way to the usage.
+- **`hint` forms** (split 2026-11-26). `hint history [N]` lists, like
+  bash `history`: the last 10 lookups, or the last N; `-s/--show NUM` and
+  `-d/--delete NUMS` (alone). It takes no word: `hint history ssh` says to
+  use `hint grep ssh`. `hint grep [-c] WORD` finds: every lookup whose
+  question or printed commands contain WORD (a quoted phrase: all its
+  words), with the matching commands; a number is a word (`hint grep
+  5432`); `-c` prints the number of lookups. Each is a command when at
+  most one plain word follows; two or more make the line a question, so
+  "history without duplicates" and "grep recursively for a word" are
+  asked as usual. An unknown option prints the usage; `hint search ...`
+  and `hint -H ...` are questions, like any other first word. `help` is a
+  command only alone.
+  Why: one command that both listed and searched (`history [OPTIONS]
+  [WORD|N]`, with `-n/--last N`) mixed two jobs. Its lone number meant
+  "the last N", so a number could not be searched for, and `-n N` next to
+  bash's own `history N` kept tripping the author up (`history -n 10` is
+  not "the last 10" in bash). Listing and finding are now separate, each
+  in its familiar form: `history N` as in bash, and `grep` as in `history
+  | grep` (the author prefers orthogonal commands). `search` was not
+  taken for the finding command: plain hint is the search. Before
+  2026-11-26 there were also `hint search WORD` (printed commands only)
+  and `-H`/`-S` flags for several words.
+  Agreed 2026-11-20: a reserved word that swallowed questions would fail
+  silently, giving the wrong kind of answer, so the word forms are kept
+  to one plain word (a real question leads with words, "what does
+  history -c do"); a miss there says how to ask it as a question instead.
+  `hint history` alone first printed the usage; once lists were one line
+  per lookup, the author wanted it to list like bash (2026-11-20). `hint
+  help` is the way to the usage.
 - **Private:** like shell history it holds the user's commands; it stays
   local and is never committed. Tests point it into their scratch directory.
 
@@ -611,7 +625,7 @@ answers to questions.
   lookup was rejected: a mistyped flag would be remembered, and with
   several terminals writing to one history file the lines after a lookup
   may come from another terminal.
-- **Form:** `hint remember [TOOL]`. Same rule as `history`: a
+- **Form:** `hint remember [TOOL]`. Same rule as `history` and `grep`: a
   command when at most one plain word follows, a question with two or
   more (`hint remember my ssh key passphrase` is a question).
 - **Usual sequence:** `hint QUESTION`, then the user tries commands until
