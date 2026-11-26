@@ -64,7 +64,6 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import textwrap
 import time
 
 XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
@@ -1729,7 +1728,7 @@ def question_line(lines, query):
     return None
 
 
-def pick_line(tool="", verb="remember"):
+def pick_line(tool="", verb="remember", why=None):
     """((last lookup or None, command, anchored), None) or (None, error).
     When the last question is found in the live history, only the lines after
     it count, and the pick is the first of them for forget (the suggestion
@@ -1739,7 +1738,11 @@ def pick_line(tool="", verb="remember"):
     are always skipped. When the question is not in the file (asked in
     another terminal, quotes shlex cannot split), the newest line, skipping
     also history housekeeping, as before (anchored False). When there is a
-    last lookup, the history file must have been written since."""
+    last lookup, the history file must have been written since.
+    When `why` is a list, the reason for these two failures is appended to
+    it: "stale" (not written since the question) or "nothing" (no command,
+    or only trivial ones, after the question)."""
+    why = why if why is not None else []
     recs = read_log()
     rec = recs[-1] if recs else None
     hist = live_history()
@@ -1754,6 +1757,7 @@ def pick_line(tool="", verb="remember"):
     except (AttributeError, ValueError):
         asked = None
     if asked is not None and mtime < asked:
+        why.append("stale")
         again = f"hint {verb}" + (f" {tool}" if tool else "")
         return None, (f"your history file has not been written since you asked\n"
                       f"  \"{rec['query']}\"; run:  history -a; {again}")
@@ -1783,6 +1787,8 @@ def pick_line(tool="", verb="remember"):
             return (rec, cmd, anchored), None
         elif anchored and tools:
             skipped.append(cmd)
+    if anchored:
+        why.append("nothing")
     if anchored and not tool and skipped:
         # Say what was skipped and how to take each: name its tool. Per
         # tool, the line `hint VERB TOOL` takes (skipped is in pick order:
@@ -1801,6 +1807,56 @@ def pick_line(tool="", verb="remember"):
     if anchored:
         return None, f"{what} since you asked \"{rec['query']}\""
     return None, f"{what} found in {tilde(hist)}"
+
+
+PLACEHOLDER = re.compile(r"<[A-Z][A-Z@]*>")
+
+
+def printed_commands(rec):
+    """The exact commands a lookup printed, in order, once each: the user's
+    rows and the model's guesses, also the "not installed" ones; not the
+    status lines, and not rows shown as templates (`user@<HOST>`): a mark
+    needs one exact command."""
+    out = []
+    for x in printed_of(rec):
+        if x.startswith("#   "):        # a "not installed" row or guess
+            x = x[4:].split("   (")[0]
+        elif x[:1] in ("#", " ", ""):
+            continue
+        x = norm(x)
+        if x and not PLACEHOLDER.search(x) and x not in out:
+            out.append(x)
+    return out
+
+
+def forget_pick(tool):
+    """For `hintdb forget`: the line to offer, as print_pick prints it, or
+    the last lookup's commands to choose from (`NUM<TAB>QUESTION<TAB>list`,
+    then one command per line) when nothing was run after the question, or
+    the history file was not written since it. Already marked commands are
+    left out. Returns (lines, error)."""
+    why = []
+    res, err = pick_line(tool, "forget", why)
+    if res:
+        return pick_lines(res), None
+    recs = read_log()
+    if tool or not recs or not why:
+        return None, err
+    rec = recs[-1]
+    marks = wrong_marks(all_files(load_sources()))
+    cmds = [c for c in printed_commands(rec) if c not in marks]
+    if not cmds:
+        return None, (f"nothing to mark: \"{rec['query']}\" printed no exact "
+                      "command that is not marked already")
+    return [f"{rec['n']}\t{rec['query']}\tlist"] + cmds, None
+
+
+def pick_lines(res):
+    """`NUM<TAB>QUESTION<TAB>after|newest`, then the command. NUM and
+    QUESTION are empty when there is no lookup yet."""
+    rec, cmd, anchored = res
+    n, q = (rec["n"], rec["query"]) if rec else ("", "")
+    return [f"{n}\t{q}\t{'after' if anchored else 'newest'}", cmd]
 
 
 def print_pick(res):
@@ -1913,14 +1969,17 @@ def forget_save(cmd, reason):
     out = [f"saved: {line}"]
     if not found:
         return out + ["hint now hides it."], None
-    where = "; ".join(f"{tilde(p)} {'line' if len(n) == 1 else 'lines'} {', '.join(map(str, n))}"
-                      for p, _, n in found)
-    text = f"hint now hides it. It is still in {where}"
-    text += " (up-arrow, Ctrl-R); " if has_live else "; "
-    text += "delete those lines to clean it up there too."
-    if has_live:
-        text += " See the README for editing history safely."
-    return out + textwrap.wrap(text, 72, break_on_hyphens=False, break_long_words=False), None
+    # One file per line, like --where: a long path cannot break the text.
+    names = [tilde(p) for p, _, _ in found]
+    width = max(len(n) for n in names)
+    out.append("hint now hides it. It is still in" + (" your history (up-arrow, Ctrl-R)"
+                                                      if has_live else "") + ":")
+    for name, (_, _, nums) in zip(names, found):
+        word = "line" if len(nums) == 1 else "lines"
+        out.append(f"  {name.ljust(width)}  {word} {', '.join(map(str, nums))}")
+    out.append("Delete those lines to clean it up there too"
+               + ("; see the README for editing history safely." if has_live else "."))
+    return out, None
 
 
 def remember_save(question, cmd):
@@ -2055,10 +2114,10 @@ def main():
             sys.exit("hintdb: forget takes at most one TOOL")
         if WRONG == os.devnull:
             sys.exit("hintdb: marks are off (HINTDB_WRONG=/dev/null)")
-        res, err = pick_line(args.words[0] if args.words else "", "forget")
+        lines, err = forget_pick(args.words[0] if args.words else "")
         if err:
             sys.exit("hintdb: " + err)
-        print_pick(res)
+        print("\n".join(lines))
     elif args.op == "remember":
         if len(args.words) > 1:
             sys.exit("hintdb: remember takes at most one TOOL")

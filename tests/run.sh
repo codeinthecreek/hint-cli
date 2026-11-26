@@ -913,9 +913,9 @@ has "forget --where: other files listed" "$out" "$fold"
 out=$(F hintdb forget --where -- 'zzqq --nothing' 2>&1)
 status "forget --where: not found: exit 1" 1 $?
 has "forget --where: not found: says so" "$out" "is in none of your sources or your history file"
-out=$(HINTDB_LOG="$tmp/future-log" HISTFILE="$fh" HINTDB_SOURCES="$tmp/forget-sources" hint forget 2>&1 </dev/null)
-status "forget: history not written since the last lookup: exit 1" 1 $?
-has "forget: stale history says what to run" "$out" "run:  history -a; hint forget"
+out=$(HINTDB_LOG="$tmp/future-log" HISTFILE="$fh" HINTDB_SOURCES="$tmp/forget-sources" hint forget fakess 2>&1 </dev/null)
+status "forget TOOL: history not written since the last lookup: exit 1" 1 $?
+has "forget TOOL: stale history says what to run" "$out" "run:  history -a; hint forget fakess"
 
 fw="$tmp/forget-wrong"
 out=$(F hint forget history 2>&1 <<<$'history -n 10\n-n takes no count')
@@ -930,10 +930,10 @@ has "hint forget: says what it saved" "$out" "saved: history -n 10  # WRONG: -n 
 line "hint forget: the mark, with the reason, in the wrong file" "$(cat "$fw")" 1 \
   "history -n 10  # WRONG: -n takes no count"
 has "hint forget: wrong file mode 600" "$(stat -c %a "$fw")" "600"
-has "hint forget: says where it still is, live history first" "$(tr '\n' ' ' <<<"$out" | tr -s ' ')" \
-  "hint now hides it. It is still in $fh lines 2, 4;"
-has "hint forget: live history: up-arrow, Ctrl-R and the README" "$(tr '\n' ' ' <<<"$out" | tr -s ' ')" \
-  "(up-arrow, Ctrl-R); delete those lines to clean it up there too. See the README for editing history safely."
+has "hint forget: says where it still is" "$out" "hint now hides it. It is still in your history (up-arrow, Ctrl-R):"
+line "hint forget: live history first, one file per line" "$(grep -A1 'still in' <<<"$out" | tr -s ' ')" 2 " $fh lines 2, 4"
+has "hint forget: live history: the README" "$out" \
+  "Delete those lines to clean it up there too; see the README for editing history safely."
 lacks "hint forget: the new mark is not listed as a copy" "$out" "$fw"
 lacks "hint forget: the index no longer has it" "$(F hintdb query -n 30 history 2>&1)" "history -n 10"
 out=$(F hint forget history 2>&1 <<<$'history -n 10\nagain')
@@ -943,7 +943,7 @@ lacks "hint forget: already marked: no reason asked" "$out" "reason (optional"
 has "hint forget: already marked: nothing saved" "$(wc -l <"$fw")" "1"
 out=$(F hint forget fakess 2>&1 <<<$'fakess -l \'x\'\n')
 line "hint forget: no reason: a bare WRONG!" "$(cat "$fw")" 2 "fakess -l 'x'  # WRONG!"
-has "hint forget: copies found with runs of spaces as one" "$(tr '\n' ' ' <<<"$out" | tr -s ' ')" "still in $fh line 3"
+has "hint forget: copies found with runs of spaces as one" "$(tr -s ' ' <<<"$out")" " $fh line 3"
 out=$(F hint forget fakess 2>&1 <<<$'zzqq --nowhere\n')
 line "hint forget: no copies anywhere: two lines" "$(grep -v '^which\|^  Enter\|^> \|^reason' <<<"$out")" 2 \
   "hint now hides it."
@@ -1003,8 +1003,8 @@ status "remember: only trivial lines since the question: exit 1" 1 $?
 has "remember: only trivial lines: says so" "$out" 'only trivial commands since you asked "show me the last history items";'
 has "remember: only trivial lines: each with the command that takes it, in order" "$out" \
   "$(printf '  history 10            hint remember history\n  vim ~/.bash_history   hint remember vim')"
-has "forget: only trivial lines: the forget form" \
-  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb forget 2>&1)" "  history 10            hint forget history"
+has "forget TOOL: only lines of another tool after the question: not found there" \
+  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb forget fakess 2>&1)" "no fakess command since you asked"
 line "remember TOOL: a trivial line found when its tool is named" \
   "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb remember history 2>&1)" 2 "history 10"
 out=$(Q hint forget 2>&1 </dev/null)
@@ -1075,6 +1075,50 @@ has "marked guess: a bare mark is shown as WRONG" "$(W2 hintdb find -q "list soc
 printf '%s\n' 'zzqqtool -x  # WRONG!' >> "$tmp/wrong-history2"
 has "marked guess, tool not installed: marked in the model's list" \
   "$(W2 hintdb find -q "frobnicate the widget" "zzqqtool -x" 2>&1)" "#   zzqqtool -x   (WRONG!, marked by you)"
+
+echo "== forget from the last lookup's output"
+# Nothing run since the question (or only trivial lines): choose from the
+# commands the last lookup printed, so a wrong suggestion is marked unrun.
+lh="$tmp/list-history" llog="$tmp/list-log.jsonl" lw="$tmp/list-wrong"
+printf '%s\n' 'fakess -x old' 'hint show me the last history items' 'man history' > "$lh"
+jq -cn '{time: "2026-11-02T09:00:00", query: "show me the last history items", printed: [
+  "history 10", "  # your history x1: show last 10 commands",
+  "history -n 10", "  # model suggestion",
+  "ssh -L 8080:localhost:80 user@<HOST>", "  # your history x2; e.g. ssh -L 8080:localhost:80 user@gpu1.example.org",
+  "fc -ln -10", "  # model suggestion",
+  "history 10", "  # model suggestion",
+  "# see man history(1): GNU History Library",
+  "# found in notes.md, but zzqqtool is not installed here:", "#   zzqqtool -l"]}' > "$llog"
+printf '%s\n' 'fc -ln -10  # WRONG: already' > "$tmp/list-marked"
+printf 'history\t%s\n' "$tmp/list-marked" > "$tmp/list-sources"
+L() { HISTFILE="$lh" HINTDB_LOG="$llog" HINTDB_SOURCES="$tmp/list-sources" HINTDB_WRONG="$lw" \
+      HINTDB_ANSWERS="$tmp/none" HINTDB_DB="$tmp/list.db" "$@"; }
+out=$(L hintdb forget 2>&1)
+line "forget list: header with the question" "$out" 1 "$(printf '1\tshow me the last history items\tlist')"
+if [ "$(tail -n +2 <<<"$out")" = "$(printf '%s\n' 'history 10' 'history -n 10' 'zzqqtool -l')" ]; then
+  ok "forget list: commands in order, once each; no status lines, templates or marked commands"
+else bad "forget list: commands in order, once each; no status lines, templates or marked commands" "$out"; fi
+out=$(L hint forget 2>&1 <<<$'2\nhistory -n 10\n-n takes no count')
+status "hint forget list: exit 0" 0 $?
+has "hint forget list: asks from which lookup" "$out" 'which command? from "hint show me the last history items":'
+has "hint forget list: numbered" "$out" "  2  history -n 10"
+has "hint forget list: asks for a number" "$out" "number (Ctrl-C cancels):"
+has "hint forget list: then the editable line" "$out" "> history -n 10"
+line "hint forget list: saved" "$(cat "$lw")" 1 "history -n 10  # WRONG: -n takes no count"
+lacks "hint forget list: the history file is unchanged" "$(cat "$lh")" "history -n 10"
+out=$(L hint forget 2>&1 <<<$'9\n')
+status "hint forget list: a number not in the list: exit 1" 1 $?
+has "hint forget list: says so" "$out" "not a number from the list, nothing saved"
+out=$(L hint forget 2>&1 <<<$'\n')
+status "hint forget list: empty answer cancels" 1 $?
+has "hint forget list: the marked command is left out next time" "$(L hintdb forget 2>&1)" "$(printf 'history 10\nzzqqtool -l')"
+printf '%s\n' '{"time": "2099-01-01T09:00:00", "query": "asked on a server", "printed": ["history 10"]}' > "$tmp/list-future"
+line "forget list: history not written since the question: the list too" \
+  "$(HINTDB_LOG="$tmp/list-future" L env HINTDB_LOG="$tmp/list-future" hintdb forget 2>&1)" 2 "history 10"
+printf '%s\n' '{"time": "2026-11-02T09:00:00", "query": "show me the last history items", "printed": []}' > "$tmp/list-empty"
+out=$(L env HINTDB_LOG="$tmp/list-empty" hintdb forget 2>&1)
+status "forget list: nothing printed: exit 1" 1 $?
+has "forget list: nothing printed: says so" "$out" "nothing to mark"
 
 echo
 echo "$pass passed, $fail failed"

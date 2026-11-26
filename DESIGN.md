@@ -763,6 +763,20 @@ since the second rests on what the first found.
   started: `which command? the first after "hint QUESTION":`. The line is
   editable, so `hint forget history` plus an edit reaches a line that was
   not run this time. Enter goes on; an empty line or Ctrl-C cancels.
+- **From the last lookup's output** (added 2026-11-26; user: "I see
+  something is wrong and mark it without adding it to my history"): when
+  nothing was run after the question (no line, or only trivial ones), or
+  the history file was not written since it (a server without `history
+  -a`), `hint forget` lists the commands the last lookup printed,
+  numbered, from the query log, and asks for a number; the chosen command
+  then goes to the editable line as usual. Listed: the user's rows and the
+  model's guesses (also "not installed" ones), in printed order, once
+  each; not status lines, not rows shown as templates (`user@<HOST>`: a
+  mark needs one exact command), not commands already marked. A number
+  not in the list, or an empty answer, saves nothing. With a TOOL the
+  list is not offered: a TOOL names a line in the history. A `hint forget
+  N` form (the Nth printed command, without the list) was considered and
+  not taken: the user found it confusing next to `hint forget TOOL`.
 - **Reason:** a second prompt, `reason (optional, Enter for none):`. Enter
   saves `# WRONG!`; a reason saves `# WRONG: REASON`. Ctrl-C cancels, and
   nothing is saved.
@@ -777,9 +791,13 @@ since the second rests on what the first found.
 - **Output after saving, short:**
 
       saved: history -n 10  # WRONG: -n takes no count
-      hint now hides it. It is still in ~/.bash_history lines 2, 4
-      (up-arrow, Ctrl-R); delete those lines to clean it up there too.
-      See the README for editing history safely.
+      hint now hides it. It is still in your history (up-arrow, Ctrl-R):
+        ~/.bash_history  lines 2, 4
+      Delete those lines to clean it up there too; see the README for
+      editing history safely.
+
+  One file per line, as in the `--where` listing: wrapped as running
+  text, a long path broke the sentence (seen in testing, 2026-11-26).
 
   The "still in" lines list the copies in the live history and in the
   registered sources, found as the read-only version did: in history-kind

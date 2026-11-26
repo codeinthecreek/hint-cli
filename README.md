@@ -208,6 +208,11 @@ Or name its tool, to take the first line since your question that runs it:
 hint forget history
 ```
 
+If you haven't run anything since the question (you saw it was wrong in
+hint's answer), `hint forget` lists the commands that answer printed,
+numbered, and you choose one, so a wrong suggestion is marked without
+running it.
+
 hint shows the command on a line you can edit, then asks for an optional
 reason, and saves it to `~/.local/share/hintdb/wrong` as a marked line:
 
