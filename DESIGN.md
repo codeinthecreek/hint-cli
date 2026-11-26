@@ -652,7 +652,10 @@ Agreed and built 2026-11-26.
     not taken: finding it means matching the typed line, quotes and all.
 - **Prompt:** the question, then the command on an editable line (`read -e
   -i` from the terminal), so a typo or a one-off value can be fixed before
-  saving. Enter saves, Ctrl-C or an empty line cancels.
+  saving. Enter saves, Ctrl-C or an empty line cancels. A line under the
+  question says so, and how to reach another line: edit it, or (when no
+  TOOL was given) `hint answer TOOL` (user, 2026-11-26). `hint forget`
+  says the same, with "Enter lists where it is".
 - **Saved:** the whole line as edited, not only the TOOL part, so it has
   the shape of the user's existing row and merges with it. One line
   `COMMAND  # QUESTION` appended to the answers file: `HINTDB_ANSWERS`,
@@ -679,6 +682,88 @@ Agreed and built 2026-11-26.
   fixed there or cancelled. The index has the same limit.
 - **Tests** point `HINTDB_ANSWERS`, `HINTDB_LOG`, `HISTFILE` and the index
   into the scratch directory, like the other checks.
+
+## Forget
+
+Agreed and built 2026-11-26.
+
+- **Purpose:** a wrong line that keeps coming up (`history -n 10`: `-n`
+  takes no count) feeds itself. It looks right, so it gets run, so it is
+  in history once more, with a higher use count and a more trusted
+  `xN`. Bash history has the same loop for up-arrow and Ctrl-R. The typo
+  rule cannot catch it: the command is installed, and wrong flags cannot
+  be told without per-tool flag tables. `hint forget` shows where the line
+  is, so the user can delete it from the source.
+- **Read-only.** hint changes nothing: it lists the files and line
+  numbers, and the user edits them. Considered and not taken:
+  - a stored forget list that drops the line at every build: a line
+    wrong for one question may be right for another, and a mistaken
+    forget would hide it from every lookup with no sign it is missing;
+  - printing a `sed -i` command that removes the line from history
+    (tested, it works): the user chose safety over convenience, and a
+    generated pattern must escape every special character correctly.
+  Fixing the source also cleans bash's own history, which the other
+  options would not.
+- **Form:** `hint forget [TOOL]`, parsed like `hint answer`: a command when
+  at most one plain word follows, a question with two or more.
+- **Picking the line:** as for `hint answer` (the newest line of the live
+  history, or the newest TOOL line; lines that run `hint` skipped; without
+  TOOL also trivial and housekeeping lines), including the check that the
+  history file was written since the last lookup, when there is one. No
+  question is needed. The line is shown on an editable line, only to choose
+  it: so `hint forget history` plus an edit reaches a line that was not run
+  this time. Enter lists it; an empty line or Ctrl-C cancels. Nothing is
+  saved either way.
+- **Where it looks:** the live history first, registered as a source or
+  not (the line was just run there, and the bash steps are about it), then
+  every file the index is built from (the registered sources, the answers
+  file), including old and other machines' history files: they are listed
+  so the user knows, never touched. In history files
+  (and the answers file) a line matches when its command, without a
+  trailing `# comment` and with runs of spaces as one, equals the chosen
+  command. In other files a line matches when it contains the command
+  (spaces likewise), since notes put commands in code blocks or after `$ `.
+  Output: each file (home as `~`) with its line numbers. Nothing found:
+  says so and exits 1 (e.g. an edit to text that is in no file).
+- **Exact line only.** The index merges lines of the same shape into one
+  row, and hint may show the row as a template (`ssh ... user@<HOST>`).
+  `hint forget` works on one exact command; other lines of the same shape
+  stay and are listed only if they are that command.
+- **Bash steps, only when the live history is one of the files** (the
+  history file bash is writing, as for `hint answer`). Editing that file
+  while terminals are open needs care, so the steps are printed after the
+  file list; for any other file the line numbers are enough:
+
+      To remove it, delete those lines. For your bash history:
+        1. history -a        if your shell doesn't already run it after
+                             each command
+        2. edit the file and save it soon (other terminals keep appending)
+        3. in this terminal and every other open one, reload the file:
+            history -a; history -c; history -r
+           (the leading space keeps it out of history; don't use
+           history -n after an edit: it skips as many new lines as you
+           deleted)
+
+  Why each step (tested 2026-11-26, two interactive bash 5.3 shells under
+  pseudo-terminals sharing one file, `histappend`, `PROMPT_COMMAND="history
+  -a"`): `history -a` first, or the session's unwritten lines are lost by
+  the reload; an editor open on the file overwrites lines other terminals
+  append meanwhile (vim warns, other editors may not); a shell keeps a
+  removed line in memory until reloaded, but with `histappend` does not
+  write it back. Bash counts the lines of the file it has read: after k
+  lines were deleted, `history -n` in another terminal skipped the next k
+  new lines (they stay in the file but never reach that terminal), while
+  `history -c; history -r` loaded every line and none of the deleted ones.
+  The leading space relies on `ignorespace` (in `ignoreboth`); without it
+  the reload line is saved, which is harmless. The steps name plain bash
+  commands, not aliases a user may have for them.
+- **Afterwards:** the edited file has changed, so the next lookup rebuilds
+  the index without the line. No new file, no stored state, no schema bump.
+- **Limits:** a Makefile recipe joined from `\` lines is not found (the
+  file holds it in pieces). Matching other files by substring can list a
+  longer line that contains the command; the user sees it and leaves it.
+- **Tests** use fixture sources and a scratch copy of a history file;
+  `HISTFILE` decides whether the bash steps are printed.
 
 ## Known limitations
 

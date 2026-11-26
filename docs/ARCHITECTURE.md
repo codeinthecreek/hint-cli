@@ -206,6 +206,13 @@ your last command from your history file, and after you confirm it appends
 so the question becomes a comment on your command's row, and the next
 similar question finds it by its words.
 
+### Forget
+
+`hint forget` is the opposite, and read-only: for a wrong command, it lists
+every file and line number that holds it (your history file first), so you
+can delete them yourself. The next lookup sees the changed file and
+rebuilds the index without it.
+
 ## 3. Debugging a lookup
 
 `HINT_DEBUG=1` shows what the model guessed and how each candidate scored:

@@ -190,6 +190,29 @@ history -a; hint answer
 Answers are kept in `~/.local/share/hintdb/answers`, one `command  #
 question` line each. To change or remove one, edit that file.
 
+### Removing a wrong command
+
+A wrong command that looks right, such as `history -n 10` (`-n` takes no
+count), keeps coming back: each time you run it, it is in your history
+once more. To find every copy, run this after the wrong command:
+
+```bash
+hint forget
+```
+
+Or name its tool, then edit the line to the exact command:
+
+```bash
+hint forget history
+```
+
+hint lists each file and line number that holds the command, and changes
+nothing: you delete the lines yourself. When one of them is your bash
+history, it also prints the steps for editing that file safely while other
+terminals are open. The main one: afterwards, reload the history in every
+open terminal with `history -a; history -c; history -r`. Don't use
+`history -n` then; it skips as many new lines as you deleted.
+
 ### Past lookups
 
 Every lookup is kept in a local query log, and these commands read it
@@ -277,6 +300,7 @@ commands from it.
 | `-s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
 | `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
 | `answer [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
+| `forget [TOOL]` | list the files and lines that hold your last command, or your last TOOL command (changes nothing) |
 
 `-n` and `-c` work after `history`, `search`, `-H` and `-S`. `--show` and
 `--delete` work only after `history` and `-H`, on their own. `hint help`
@@ -296,6 +320,7 @@ prints the usage; `hint help me ...` is a question.
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log ...` | read and edit the query log (used by `hint history` and `hint search`) |
 | `hintdb answer [TOOL]` | the last question and the command that answers it (used by `hint answer`) |
+| `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND (used by `hint forget`) |
 | `hintdb query [-n N] WORDS...` | the search for the words alone, with scores (debugging) |
 
 Source kinds are detected from the file name. Use `--kind` to override, for

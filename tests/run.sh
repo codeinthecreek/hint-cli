@@ -844,6 +844,10 @@ out=$(A hint answer fakess 2>&1 <<<"sudo fakess -ltnp 'sport = :8080'")
 status "hint answer: edited line saved (exit 0)" 0 $?
 has "hint answer: prompt shows the question" "$out" 'answer to 2 "who is listening on port 8080":'
 has "hint answer: prompt shows the command" "$out" "> sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
+has "hint answer: says the keys" "$out" "  Enter saves, Ctrl-C cancels. Not this line? Edit it."
+lacks "hint answer TOOL: no hint to name a tool" "$out" "name its tool"
+has "hint answer: without TOOL, says how to name one" \
+  "$(printf '\n' | A hint answer 2>&1)" "Not this line? Edit it, or name its tool: hint answer TOOL."
 has "hint answer: says where it was saved" "$out" "saved to"
 line "hint answer: the line as edited, with the question as its comment" "$(cat "$ans")" 1 \
   "sudo fakess -ltnp 'sport = :8080'  # who is listening on port 8080"
@@ -872,6 +876,68 @@ line "answered row: merged with the history row, the question as its note" "$out
 out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "who is listening on port 8080" "netstat -tulpn" 2>/dev/null)
 has "answered command found despite the wrong guessed tool" "$out" "sudo fakess -ltnp 'sport = :8080'"
 has "answered command not on PATH is kept (it has a note)" "$out" "# your history x1: who is listening on port 8080"
+
+echo "== hint forget"
+# Its own sources: a reference history and a notes file; the live history
+# is not registered (forget still looks in it); the answers file is built in.
+fh="$tmp/forget-history" fold="$tmp/forget-old-history" fnotes="$tmp/forget-notes.md"
+printf '%s\n' 'echo keep' 'history -n 10' "fakess -l  'x'  # spaced" 'history -n 10  # again' \
+  'history -n' 'history -a; hint forget' > "$fh"
+printf '%s\n' 'echo old' 'history -n 10' > "$fold"
+printf '%s\n' '# Shell' '' '```bash' '$ history -n 10' '```' > "$fnotes"
+printf '%s\n' 'history -n 10  # show the last ten' > "$tmp/forget-answers"
+printf 'history\t%s\nauto\t%s\n' "$fold" "$fnotes" > "$tmp/forget-sources"
+F() { HISTFILE="$fh" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/forget-sources" \
+      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_DB="$tmp/forget.db" "$@"; }
+sums() { md5sum "$fh" "$fold" "$fnotes" "$tmp/forget-answers"; }
+before=$(sums)
+
+has "forget: last command, skipping hint and history lines" "$(F hintdb forget 2>&1)" "fakess -l  'x'"
+has "forget TOOL: newest line with that tool" "$(F hintdb forget history 2>&1)" "history -n"
+out=$(F hintdb forget --where -- 'history -n 10' 2>&1)
+status "forget --where: found, exit 0" 0 $?
+line "forget --where: names the command" "$out" 1 "history -n 10 is in:"
+line "forget --where: live history first, comment ignored, not the shorter line" "$(tr -s ' ' <<<"$out")" 2 " $fh lines 2, 4"
+has "forget --where: a reference history" "$(tr -s ' ' <<<"$out")" "$fold line 2"
+has "forget --where: a notes file, by contained text" "$(tr -s ' ' <<<"$out")" "$fnotes line 4"
+has "forget --where: the answers file" "$(tr -s ' ' <<<"$out")" "$tmp/forget-answers line 1"
+has "forget --where: bash steps when the live history is one of the files" "$out" \
+  " history -a; history -c; history -r"
+has "forget --where: says not to use history -n" "$out" "don't use"
+out=$(F hintdb forget --where -- "fakess -l 'x'" 2>&1)
+has "forget --where: runs of spaces as one" "$out" "$fh  line 3"
+printf '%s\n' 'echo other' > "$tmp/other-history"
+out=$(HISTFILE="$tmp/other-history" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/forget-sources" \
+      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_DB="$tmp/forget.db" hintdb forget --where -- 'history -n 10' 2>&1)
+has "forget --where: other files listed" "$out" "$fold"
+lacks "forget --where: no bash steps when the live history is not one of the files" "$out" "history -c"
+out=$(F hintdb forget --where -- 'zzqq --nothing' 2>&1)
+status "forget --where: not found: exit 1" 1 $?
+has "forget --where: not found: says so" "$out" "is in none of your sources or your history file"
+out=$(HINTDB_LOG="$tmp/future-log" HISTFILE="$fh" HINTDB_SOURCES="$tmp/forget-sources" hint forget 2>&1 </dev/null)
+status "forget: history not written since the last lookup: exit 1" 1 $?
+has "forget: stale history says what to run" "$out" "run:  history -a; hint forget"
+
+out=$(F hint forget history 2>&1 <<<"history -n 10")
+status "hint forget: exit 0" 0 $?
+has "hint forget: asks which command" "$out" "which command?"
+has "hint forget: says the keys" "$out" "  Enter lists where it is, Ctrl-C cancels. Not this line? Edit it."
+has "hint forget: without TOOL, says how to name one" \
+  "$(printf '\n' | F hint forget 2>&1)" "or name its tool: hint forget TOOL."
+has "hint forget: offers the newest line" "$out" "> history -n"
+has "hint forget: lists the edited command's lines" "$out" "history -n 10 is in:"
+has "hint forget: bash steps" "$out" "in this terminal and every other open one"
+out=$(printf '\n' | F hint forget 2>&1)
+status "hint forget: empty line cancels (exit 1)" 1 $?
+has "hint forget: cancel says nothing changed" "$out" "cancelled, nothing changed"
+if [ "$(sums)" = "$before" ]; then ok "hint forget: no file changed"; else bad "hint forget: no file changed" "$(sums)"; fi
+out=$(hint forget -x 2>&1)
+status "hint forget -x: usage, exit 2" 2 $?
+has "usage: forget" "$(hint help 2>&1)" "hint forget [TOOL]"
+printf '%s\n' 'nmcli connection delete home' > "$reply"
+hint forget a wifi network >/dev/null 2>&1
+has "forget + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "forget a wifi network"
 
 echo
 echo "$pass passed, $fail failed"

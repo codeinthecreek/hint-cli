@@ -29,6 +29,10 @@ DB, because dedup is global across sources.
                                                      command that answers it
                                                      (used by hint answer)
   hintdb answer --save -q QUESTION -- COMMAND        save an answer
+  hintdb forget [TOOL]                               your last command (or last
+                                                     TOOL command), for hint forget
+  hintdb forget --where -- COMMAND                   the files and lines holding
+                                                     COMMAND (nothing is changed)
 
 Query log: each `find` from the command line appends one JSON line (time,
 question, guesses, printed lines, each printed row's source files) to
@@ -1646,18 +1650,15 @@ def line_tools(cmd):
     return [os.path.basename(w) for w in split_cmd(norm(spaced_ops(cmd)))[0].split()]
 
 
-def answer_candidate(tool=""):
-    """((last lookup, command), None) or (None, error message).
-    The command is the newest line of the live history that answers it:
-    with TOOL, the newest line where any command is TOOL; without, the
-    newest line that is not trivial and not only history housekeeping.
-    Lines that run hint are always skipped (the `hint answer` line itself)."""
-    if ANSWERS == os.devnull:
-        return None, "answers are off (HINTDB_ANSWERS=/dev/null)"
+def pick_line(tool="", verb="answer"):
+    """((last lookup or None, command), None) or (None, error message).
+    The command is the newest line of the live history: with TOOL, the
+    newest line where any command is TOOL; without, the newest line that is
+    not trivial and not only history housekeeping. Lines that run hint are
+    always skipped (the `hint answer` line itself). When there is a last
+    lookup, the history file must have been written since."""
     recs = read_log()
-    if not recs:
-        return None, "no question to answer yet: ask one with hint first"
-    rec = recs[-1]
+    rec = recs[-1] if recs else None
     hist = live_history()
     try:
         mtime = os.stat(hist).st_mtime
@@ -1667,10 +1668,10 @@ def answer_candidate(tool=""):
                       "if it is elsewhere, export HISTFILE in ~/.bashrc")
     try:
         asked = time.mktime(time.strptime(str(rec.get("time")), "%Y-%m-%dT%H:%M:%S"))
-    except ValueError:
+    except (AttributeError, ValueError):
         asked = None
     if asked is not None and mtime < asked:
-        again = "hint answer" + (f" {tool}" if tool else "")
+        again = f"hint {verb}" + (f" {tool}" if tool else "")
         return None, (f"your history file has not been written since you asked\n"
                       f"  \"{rec['query']}\"; run:  history -a; {again}")
     for line in reversed(lines):
@@ -1689,6 +1690,73 @@ def answer_candidate(tool=""):
             return (rec, cmd), None
     what = f"no {tool} command" if tool else "no command"
     return None, f"{what} found in {tilde(hist)}"
+
+
+def answer_candidate(tool=""):
+    """((last lookup, command), None) or (None, error message): the last
+    question and the line that answers it (see pick_line)."""
+    if ANSWERS == os.devnull:
+        return None, "answers are off (HINTDB_ANSWERS=/dev/null)"
+    if not read_log():
+        return None, "no question to answer yet: ask one with hint first"
+    return pick_line(tool, "answer")
+
+
+FORGET_STEPS = """\
+To remove it, delete those lines. For your bash history:
+  1. history -a        if your shell doesn't already run it after
+                       each command
+  2. edit the file and save it soon (other terminals keep appending)
+  3. in this terminal and every other open one, reload the file:
+      history -a; history -c; history -r
+     (the leading space keeps it out of history; don't use
+     history -n after an edit: it skips as many new lines as you
+     deleted)"""
+
+
+def forget_where(cmd):
+    """Where the exact command is, in the live history (first, registered or
+    not) and every file the index is built from: [(file, [line numbers])],
+    and whether the live history is one of them. History-kind files match the line's command
+    (comment dropped, spaces as one); other files a line containing it."""
+    want = norm(cmd)
+    live = os.path.realpath(live_history())
+    # The live history first: the bash steps printed below are about it.
+    files = [("history", live_history())] + all_files(load_sources())
+    found, seen, has_live = [], set(), False
+    for kind, path in files:
+        real = os.path.realpath(path)
+        if real in seen:
+            continue
+        seen.add(real)
+        try:
+            lines = list(read_lines(path))
+        except OSError:
+            continue
+        if kind == "history":
+            nums = [i for i, l in enumerate(lines, 1) if norm(split_comment(l)[0]) == want]
+        else:
+            nums = [i for i, l in enumerate(lines, 1) if want in norm(l)]
+        if nums:
+            found.append((path, nums))
+            has_live = has_live or real == live
+    return found, has_live
+
+
+def forget_report(cmd):
+    """The lines printed by `hintdb forget --where`, or None if not found."""
+    found, has_live = forget_where(cmd)
+    if not found:
+        return None
+    names = [tilde(p) for p, _ in found]
+    width = max(len(n) for n in names)
+    out = [f"{norm(cmd)} is in:"]
+    for name, (_, nums) in zip(names, found):
+        word = "line" if len(nums) == 1 else "lines"
+        out.append(f"  {name.ljust(width)}  {word} {', '.join(map(str, nums))}")
+    if has_live:
+        out += ["", FORGET_STEPS]
+    return out
 
 
 def answer_save(question, cmd):
@@ -1759,6 +1827,10 @@ def main():
     an.add_argument("--save", action="store_true", help="append COMMAND  # QUESTION")
     an.add_argument("-q", "--query", help="the question (with --save)")
     an.add_argument("words", nargs="*", help="TOOL, or with --save the COMMAND")
+    fg = sub.add_parser("forget")
+    fg.add_argument("--where", action="store_true",
+                    help="list the files and lines holding COMMAND")
+    fg.add_argument("words", nargs="*", help="TOOL, or with --where the COMMAND")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
     q.add_argument("--no-update", action="store_true")
@@ -1790,6 +1862,19 @@ def main():
         if err:
             sys.exit("hintdb: " + err)
         print(f"hintdb: saved to {tilde(ANSWERS)}")
+    elif args.op == "forget" and args.where:
+        lines = forget_report(" ".join(args.words))
+        if lines is None:
+            sys.exit(f"hintdb: {' '.join(args.words)} is in none of your sources "
+                     "or your history file")
+        print("\n".join(lines))
+    elif args.op == "forget":
+        if len(args.words) > 1:
+            sys.exit("hintdb: forget takes at most one TOOL")
+        res, err = pick_line(args.words[0] if args.words else "", "forget")
+        if err:
+            sys.exit("hintdb: " + err)
+        print(res[1])
     elif args.op == "answer":
         if len(args.words) > 1:
             sys.exit("hintdb: answer takes at most one TOOL")
