@@ -660,6 +660,12 @@ Agreed and built 2026-11-26.
     history`). History and `fc` lines count: `history -n 10` and `fc -ln
     -10` are lines one forgets or answers with, and the `history -a` before
     `hint answer` is on the same line as hint or comes after the answer.
+    When only trivial lines follow the question, the message lists them,
+    each with the command that takes it (`history 10   hint answer
+    history`): in real use the answer was `history 10`, followed by `vim
+    ~/.bash_history`, and "no command since you asked" did not say why
+    (2026-11-26). The rule stays: without it `vim ~/.bash_history` would
+    have been offered.
   - With TOOL: the last (answer) or first (forget) line after the question
     in which any command is TOOL, with nothing else skipped: naming the
     tool means that tool is wanted, so `hint answer history` finds

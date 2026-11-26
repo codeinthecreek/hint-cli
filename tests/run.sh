@@ -972,6 +972,16 @@ line "the question found through the shell's quoting" \
 line "the last asking of the question counts" \
   "$(printf '%s\n' 'hint show me the last history items' 'fakess -a' 'hint show me the last history items' 'fakess -b' > "$tmp/q-twice"; \
      HISTFILE="$tmp/q-twice" HINTDB_LOG="$qlog" hintdb forget 2>&1)" 2 "fakess -b"
+printf '%s\n' 'hint show me the last history items' 'history 10' 'vim ~/.bash_history' 'hint answer' > "$tmp/q-trivial"
+out=$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb answer 2>&1)
+status "answer: only trivial lines since the question: exit 1" 1 $?
+has "answer: only trivial lines: says so" "$out" 'only trivial commands since you asked "show me the last history items";'
+has "answer: only trivial lines: each with the command that takes it, in order" "$out" \
+  "$(printf '  history 10            hint answer history\n  vim ~/.bash_history   hint answer vim')"
+has "forget: only trivial lines: the forget form" \
+  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb forget 2>&1)" "  history 10            hint forget history"
+line "answer TOOL: a trivial line found when its tool is named" \
+  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb answer history 2>&1)" 2 "history 10"
 out=$(Q hint forget 2>&1 </dev/null)
 has "hint forget: says it starts after the question" "$out" \
   'which command? the first after "hint show me the last history items":'

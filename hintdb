@@ -1703,6 +1703,7 @@ def pick_line(tool="", verb="answer"):
             span = span[::-1]
     else:
         span = lines[::-1]
+    skipped = []   # trivial lines after the question, in span order
     for line in span:
         if re.fullmatch(r"#\d{9,11}", line):   # HISTTIMEFORMAT stamp lines
             continue
@@ -1718,6 +1719,22 @@ def pick_line(tool="", verb="answer"):
         elif (tools and not is_trivial(norm(cmd))
               and (anchored or not set(tools) <= HOUSEKEEPING)):
             return (rec, cmd, anchored), None
+        elif anchored and tools:
+            skipped.append(cmd)
+    if anchored and not tool and skipped:
+        # Say what was skipped and how to take each: name its tool. Per
+        # tool, the line `hint VERB TOOL` takes (skipped is in pick order:
+        # newest first for answer, oldest first for forget); listed in the
+        # file's order.
+        picks = {}
+        for c in skipped:
+            picks.setdefault(line_tools(c)[0], c)
+        rows = sorted(picks.items(), key=lambda kv: skipped.index(kv[1]),
+                      reverse=(verb == "answer"))[-5:]
+        width = max(len(c) for _, c in rows)
+        return None, (f"only trivial commands since you asked \"{rec['query']}\";\n"
+                      "to take one, name its tool:\n"
+                      + "\n".join(f"  {c.ljust(width)}   hint {verb} {t}" for t, c in rows))
     what = f"no {tool} command" if tool else "no command"
     if anchored:
         return None, f"{what} since you asked \"{rec['query']}\""
