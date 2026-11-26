@@ -576,9 +576,9 @@ other words, so the limitation stays (README).
   answer, so the word forms are kept to one plain word (a real question
   leads with words, "what does history -c do"); a miss there says how to
   ask it as a question instead. A known option marks a command: `hint
-  history postgres --count` was first asked as a question, which the user
+  history postgres --count` was first asked as a question, which the author
   found confusing. `hint history` alone first printed the usage too; once
-  lists were one line per lookup, the user wanted it to list like bash
+  lists were one line per lookup, the author wanted it to list like bash
   (2026-11-20). `hint help` is the way to the usage.
 - **Private:** like shell history it holds the user's commands; it stays
   local and is never committed. Tests point it into their scratch directory.
@@ -587,7 +587,7 @@ other words, so the limitation stays (README).
 
 Agreed and built 2026-11-26. Named `hint answer` at first; renamed the
 same day to `hint remember`, which pairs with `hint forget` and says what
-it does (user). The file and `HINTDB_ANSWERS` keep their name: they hold
+it does (the author). The file and `HINTDB_ANSWERS` keep their name: they hold
 answers to questions.
 
 - **Purpose:** when a lookup missed and the user found the command some
@@ -681,7 +681,7 @@ answers to questions.
   -i` from the terminal), so a typo or a one-off value can be fixed before
   saving. Enter saves, Ctrl-C or an empty line cancels. A line under the
   question says so, and how to reach another line: edit it, or (when no
-  TOOL was given) `hint remember TOOL` (user, 2026-11-26). `hint forget`
+  TOOL was given) `hint remember TOOL` (the author, 2026-11-26). `hint forget`
   says the same, with "Enter lists where it is".
 - **Saved:** the whole line as edited, not only the TOOL part, so it has
   the shape of the user's existing row and merges with it. One line
@@ -737,7 +737,7 @@ since the second rests on what the first found.
     one command saved (`cat` shows what was marked), no "answers" file
     holding marks, and no remembered and marked copy of one command in
     the same file.
-  - **How it got here:** first read-only, because the user chose safety
+  - **How it got here:** first read-only, because the author chose safety
     over convenience; considered then and not taken: a stored forget
     list (a line wrong for one question may be right for another, and a
     mistaken forget would hide it with no sign), and printing a `sed -i`
@@ -750,7 +750,7 @@ since the second rests on what the first found.
     longer holds: a mark says the command is wrong in itself, is listed
     by `hintdb stats`, labels a model guess of it, and is undone by
     deleting a line. Saving it to hint's own file needs no editing of
-    bash history at all (user, 2026-11-26: "save the mark to hint's own
+    bash history at all (the author, 2026-11-26: "save the mark to hint's own
     file").
 - **Form:** `hint forget [TOOL]`, parsed like `hint remember`: a command
   when at most one plain word follows, a question with two or more.
@@ -776,7 +776,7 @@ since the second rests on what the first found.
   not in the list, or an empty answer, saves nothing. With a TOOL the
   list is not offered: a TOOL names a line in the history. A `hint forget
   N` form (the Nth printed command, without the list) was considered and
-  not taken: the user found it confusing next to `hint forget TOOL`.
+  not taken: the author found it confusing next to `hint forget TOOL`.
 - **Reason:** a second prompt, `reason (optional, Enter for none):`. Enter
   saves `# WRONG!`; a reason saves `# WRONG: REASON`. Ctrl-C cancels, and
   nothing is saved.
@@ -842,7 +842,7 @@ Agreed and built 2026-11-26.
   takes no count) is marked where it is, and hint stops showing it for
   every question. A command that is right but not for this question is a
   different case: `hint remember` puts the question's words on the right
-  command instead, and nothing is hidden (user, 2026-11-26).
+  command instead, and nothing is hidden (the author, 2026-11-26).
 - **The mark:** a trailing comment on a line in a history-kind file (bash
   history, other history files, the answers file, and the wrong file that
   `hint forget` writes) whose text starts with
@@ -858,7 +858,7 @@ Agreed and built 2026-11-26.
     for the problem, not the command;
   - a comment line typed at the prompt (`# WRONG: history -n 10`; tested:
     bash saves it and runs nothing, not even `$(...)` or redirections in
-    it): the user found it unnatural, and marks are added while editing
+    it): the author found it unnatural, and marks are added while editing
     the history file anyway, from `hint forget`'s line numbers;
   - marks in notes files: notes are the user's own files, and deleting
     the line there is simple;
