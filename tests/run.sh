@@ -31,7 +31,7 @@ export PATH="$tmp/bin:$PATH"
 # Isolated index and sources.
 export HINTDB_DB="$tmp/hint.db" HINTDB_MANDB="$tmp/man.db"
 export HINTDB_SOURCES="$tmp/sources" HISTFILE="$fix/history"
-export HINTDB_LOG="$tmp/queries.jsonl" HINTDB_ANSWERS="$tmp/answers"
+export HINTDB_LOG="$tmp/queries.jsonl" HINTDB_ANSWERS="$tmp/answers" HINTDB_WRONG="$tmp/wrong"
 export HINTDB_APROPOS="cat $fix/apropos.txt"
 unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL
 
@@ -869,7 +869,9 @@ has "remember + more words is a question" "$(jq -r '.messages[-1].content' <"$tm
 # In the index: built in, read as history, merged with the row of the same shape.
 has "sources: answers file listed as built in" "$(hintdb sources)" "$ans	(built in: hint remember)"
 has "sources: no answers yet" "$(HINTDB_ANSWERS="$tmp/none" hintdb sources)" "no answers yet"
-lacks "sources: answers off: not listed" "$(HINTDB_ANSWERS=/dev/null hintdb sources)" "built in"
+lacks "sources: answers off: not listed" "$(HINTDB_ANSWERS=/dev/null hintdb sources)" "built in: hint remember"
+has "sources: wrong file listed as built in" "$(hintdb sources)" "$tmp/wrong	(built in: hint forget, nothing marked yet)"
+lacks "sources: marks off: not listed" "$(HINTDB_WRONG=/dev/null hintdb sources)" "built in: hint forget"
 out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "space used by the current release" "df -h" 2>/dev/null)
 line "remembered row found by the question's words" "$out" 1 "du -sh /srv/current"
 line "remembered row: merged with the history row, the question as its note" "$out" 2 \
@@ -889,7 +891,7 @@ printf '%s\n' '# Shell' '' '```bash' '$ history -n 10' '```' > "$fnotes"
 printf '%s\n' 'history -n 10  # show the last ten' > "$tmp/forget-answers"
 printf 'history\t%s\nauto\t%s\n' "$fold" "$fnotes" > "$tmp/forget-sources"
 F() { HISTFILE="$fh" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/forget-sources" \
-      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_DB="$tmp/forget.db" "$@"; }
+      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_WRONG="$tmp/forget-wrong" HINTDB_DB="$tmp/forget.db" "$@"; }
 sums() { md5sum "$fh" "$fold" "$fnotes" "$tmp/forget-answers"; }
 before=$(sums)
 
@@ -902,16 +904,12 @@ line "forget --where: live history first, comment ignored, not the shorter line"
 has "forget --where: a reference history" "$(tr -s ' ' <<<"$out")" "$fold line 2"
 has "forget --where: a notes file, by contained text" "$(tr -s ' ' <<<"$out")" "$fnotes line 4"
 has "forget --where: the answers file" "$(tr -s ' ' <<<"$out")" "$tmp/forget-answers line 1"
-has "forget --where: bash steps when the live history is one of the files" "$out" \
-  " history -a; history -c; history -r"
-has "forget --where: says not to use history -n" "$out" "don't use"
 out=$(F hintdb forget --where -- "fakess -l 'x'" 2>&1)
 has "forget --where: runs of spaces as one" "$out" "$fh  line 3"
 printf '%s\n' 'echo other' > "$tmp/other-history"
 out=$(HISTFILE="$tmp/other-history" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/forget-sources" \
       HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_DB="$tmp/forget.db" hintdb forget --where -- 'history -n 10' 2>&1)
 has "forget --where: other files listed" "$out" "$fold"
-lacks "forget --where: no bash steps when the live history is not one of the files" "$out" "history -c"
 out=$(F hintdb forget --where -- 'zzqq --nothing' 2>&1)
 status "forget --where: not found: exit 1" 1 $?
 has "forget --where: not found: says so" "$out" "is in none of your sources or your history file"
@@ -919,18 +917,45 @@ out=$(HINTDB_LOG="$tmp/future-log" HISTFILE="$fh" HINTDB_SOURCES="$tmp/forget-so
 status "forget: history not written since the last lookup: exit 1" 1 $?
 has "forget: stale history says what to run" "$out" "run:  history -a; hint forget"
 
-out=$(F hint forget history 2>&1 <<<"history -n 10")
+fw="$tmp/forget-wrong"
+out=$(F hint forget history 2>&1 <<<$'history -n 10\n-n takes no count')
 status "hint forget: exit 0" 0 $?
 has "hint forget: asks which command" "$out" "which command?"
-has "hint forget: says the keys" "$out" "  Enter lists where it is, Ctrl-C cancels. Not this line? Edit it."
+has "hint forget: says the keys" "$out" "  Enter marks it WRONG, Ctrl-C cancels. Not this line? Edit it."
 has "hint forget: without TOOL, says how to name one" \
   "$(printf '\n' | F hint forget 2>&1)" "or name its tool: hint forget TOOL."
 has "hint forget: offers the newest line" "$out" "> history -n"
-has "hint forget: lists the edited command's lines" "$out" "history -n 10 is in:"
-has "hint forget: bash steps" "$out" "in this terminal and every other open one"
+has "hint forget: asks for a reason" "$out" "reason (optional, Enter for none):"
+has "hint forget: says what it saved" "$out" "saved: history -n 10  # WRONG: -n takes no count"
+line "hint forget: the mark, with the reason, in the wrong file" "$(cat "$fw")" 1 \
+  "history -n 10  # WRONG: -n takes no count"
+has "hint forget: wrong file mode 600" "$(stat -c %a "$fw")" "600"
+has "hint forget: says where it still is, live history first" "$(tr '\n' ' ' <<<"$out" | tr -s ' ')" \
+  "hint now hides it. It is still in $fh lines 2, 4;"
+has "hint forget: live history: up-arrow, Ctrl-R and the README" "$(tr '\n' ' ' <<<"$out" | tr -s ' ')" \
+  "(up-arrow, Ctrl-R); delete those lines to clean it up there too. See the README for editing history safely."
+lacks "hint forget: the new mark is not listed as a copy" "$out" "$fw"
+lacks "hint forget: the index no longer has it" "$(F hintdb query -n 30 history 2>&1)" "history -n 10"
+out=$(F hint forget history 2>&1 <<<$'history -n 10\nagain')
+status "hint forget: already marked: exit 0" 0 $?
+has "hint forget: already marked: says where" "$out" "history -n 10 is already marked WRONG: $fw line 1"
+lacks "hint forget: already marked: no reason asked" "$out" "reason (optional"
+has "hint forget: already marked: nothing saved" "$(wc -l <"$fw")" "1"
+out=$(F hint forget fakess 2>&1 <<<$'fakess -l \'x\'\n')
+line "hint forget: no reason: a bare WRONG!" "$(cat "$fw")" 2 "fakess -l 'x'  # WRONG!"
+has "hint forget: copies found with runs of spaces as one" "$(tr '\n' ' ' <<<"$out" | tr -s ' ')" "still in $fh line 3"
+out=$(F hint forget fakess 2>&1 <<<$'zzqq --nowhere\n')
+line "hint forget: no copies anywhere: two lines" "$(grep -v '^which\|^  Enter\|^> \|^reason' <<<"$out")" 2 \
+  "hint now hides it."
+out=$(F env HINTDB_WRONG=/dev/null hint forget fakess 2>&1 <<<$'fakess -z\n')
+status "hint forget: marks off: exit 1" 1 $?
+has "hint forget: marks off: says so" "$out" "marks are off (HINTDB_WRONG=/dev/null)"
+lacks "hint forget: marks off: says so before any prompt" "$out" "which command?"
+n=$(wc -l <"$fw")
 out=$(printf '\n' | F hint forget 2>&1)
 status "hint forget: empty line cancels (exit 1)" 1 $?
-has "hint forget: cancel says nothing changed" "$out" "cancelled, nothing changed"
+has "hint forget: cancel says nothing saved" "$out" "cancelled, nothing saved"
+has "hint forget: cancel: wrong file unchanged" "$(wc -l <"$fw")" "$n"
 if [ "$(sums)" = "$before" ]; then ok "hint forget: no file changed"; else bad "hint forget: no file changed" "$(sums)"; fi
 out=$(hint forget -x 2>&1)
 status "hint forget -x: usage, exit 2" 2 $?
@@ -1023,19 +1048,13 @@ has "stats: lists marked commands" "$out" "marked WRONG (never shown by hint):"
 has "stats: each mark with file, line and comment" "$(tr -s ' ' <<<"$out")" " fakess -r $wh line 4: WRONG: -r is not a flag"
 
 out=$(W hintdb forget --where -- 'fakess -n 10' 2>&1)
-has "forget: says the command is already marked, and where" "$out" \
-  "fakess -n 10 is already marked WRONG, so hint does not show it: $wh line 2"
+has "forget --where: says the command is already marked, and where" "$out" \
+  "fakess -n 10 is already marked WRONG: $wh line 2"
 has "forget: lists the unmarked copies (spaces as one), not the marked line" "$(tr -s ' ' <<<"$out")" " $wh lines 1, 10"
 has "forget: the notes copy is listed" "$(tr -s ' ' <<<"$out")" " $wn line 4"
-has "forget: already marked: deleting is only cleanup" "$out" "hint hides these too"
-lacks "forget: already marked: no suggestion to mark" "$out" "add a comment to the end"
-out=$(W hintdb forget --where -- 'fakess -n' 2>&1)
-has "forget: unmarked command: suggests the mark" "$out" "lines in a history file:  # WRONG!   (or  # WRONG: why)"
-has "forget: unmarked command: or delete from the last line" "$out" "Or delete the lines, starting from the last one"
-has "forget: bash steps still follow" "$out" " history -a; history -c; history -r"
+has "forget --where: already marked: the unmarked copies under their own heading" "$out" "Unmarked copies:"
 out=$(W hintdb forget --where -- 'fakess -l' 2>&1)
-has "forget: only in a notes file: delete the line" "$out" "To remove it, delete those lines."
-lacks "forget: only in a notes file: no mark suggestion" "$out" "# WRONG!"
+has "forget --where: only in a notes file" "$(tr -s ' ' <<<"$out")" " $wn line 5"
 sed -i 's/  # WRONG!$//' "$wh"
 has "removing the mark brings the command back" "$(W hintdb query -n 30 fakess 2>&1)" "fakess -n 10"
 

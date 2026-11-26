@@ -195,8 +195,8 @@ question` line each. To change or remove one, edit that file.
 
 A wrong command that looks right, such as `history -n 10` (`-n` takes no
 count), keeps coming back: each time you run it, it is in your history
-once more. To find every copy, run this after trying it; hint takes the
-first command you ran after your last question:
+once more. After trying it, mark it as wrong. hint takes the first command
+you ran after your last question:
 
 ```bash
 hint forget
@@ -208,27 +208,47 @@ Or name its tool, to take the first line since your question that runs it:
 hint forget history
 ```
 
-hint lists each file and line number that holds the command, and changes
-nothing: you edit the files yourself. In a history file you can either
-delete the lines, or mark the command as wrong by adding a comment to the
-end of one of them:
+hint shows the command on a line you can edit, then asks for an optional
+reason, and saves it to `~/.local/share/hintdb/wrong` as a marked line:
 
 ```text
-history -n 10  # WRONG!
+history -n 10  # WRONG: -n takes no count
 ```
 
-A comment that starts with `WRONG` as a whole word, in capitals, marks the
-command: `# WRONG`, `# WRONG!`, or with a reason, `# WRONG: -n takes no
-count`. hint then never shows that exact command again, from any source,
-even after you run it again. Other commands stay, such as `history -n`. To
-undo it, remove the comment. `hintdb stats` lists the commands you have
-marked.
+hint then never shows that exact command again, from any of your sources,
+even after you run it again, and labels it when the model suggests it.
+Other commands stay, such as `history -n`. `hintdb stats` lists the
+commands you have marked. To undo a mark, delete its line from that file.
 
-When one of the files is your bash history, `hint forget` also prints the
-steps for editing it safely while other terminals are open. The main one:
-afterwards, reload the history in every open terminal with `history -a;
-history -c; history -r`. Don't use `history -n` then; it skips as many new
-lines as you deleted.
+The same comment works in your own files: a comment that starts with
+`WRONG` as a whole word, in capitals, on a line in your bash history marks
+the command too: `# WRONG`, `# WRONG!` or `# WRONG: reason`.
+
+#### Cleaning it out of your bash history
+
+`hint forget` doesn't change your bash history, so the command is still
+there for up-arrow and Ctrl-R. It tells you the line numbers. To delete
+them while other terminals are open:
+
+1. Write this terminal's history to the file first, unless your shell does
+   it after each command:
+
+   ```bash
+   history -a
+   ```
+
+2. Edit the file, delete the lines from the last one up (so the other line
+   numbers stay right), and save soon: other terminals keep appending to
+   it.
+3. In this terminal and every other open one, reload the history. The
+   leading space keeps the line itself out of history:
+
+   ```bash
+    history -a; history -c; history -r
+   ```
+
+   Don't use `history -n` after an edit: it skips as many new lines as you
+   deleted.
 
 ### Past lookups
 
@@ -288,6 +308,7 @@ hint -H ssh key
 | `HINTDB_APROPOS` | `apropos .` | command that lists man page summaries (for testing) |
 | `HINTDB_LOG` | `~/.local/share/hintdb/queries.jsonl` | query log; `/dev/null` turns it off |
 | `HINTDB_ANSWERS` | `~/.local/share/hintdb/answers` | answers saved by `hint remember`; `/dev/null` turns them off |
+| `HINTDB_WRONG` | `~/.local/share/hintdb/wrong` | commands marked by `hint forget`; `/dev/null` turns it off |
 | `HISTFILE` | `~/.bash_history` | the history `hint remember` reads; export it if yours is elsewhere |
 
 The query log stays on your machine, like your shell history, and contains
@@ -317,7 +338,7 @@ commands from it.
 | `-s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
 | `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
 | `answer [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
-| `forget [TOOL]` | list the files and lines that hold your last command, or your last TOOL command (changes nothing) |
+| `forget [TOOL]` | mark the first command after your last question, or the first TOOL command, as wrong, so hint never shows it |
 
 `-n` and `-c` work after `history`, `search`, `-H` and `-S`. `--show` and
 `--delete` work only after `history` and `-H`, on their own. `hint help`
@@ -337,7 +358,8 @@ prints the usage; `hint help me ...` is a question.
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log ...` | read and edit the query log (used by `hint history` and `hint search`) |
 | `hintdb remember [TOOL]` | the last question and the command that answers it (used by `hint remember`) |
-| `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND (used by `hint forget`) |
+| `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND, and where it is marked |
+| `hintdb forget --save [--reason R] -- COMMAND` | mark COMMAND as wrong (used by `hint forget`) |
 | `hintdb query [-n N] WORDS...` | the search for the words alone, with scores (debugging) |
 
 Source kinds are detected from the file name. Use `--kind` to override, for

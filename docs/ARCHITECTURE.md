@@ -209,10 +209,11 @@ similar question finds it by its words.
 
 ### Forget
 
-`hint forget` is the opposite, and read-only: for a wrong command, it lists
-every file and line number that holds it (your history file first), so you
-can delete them yourself. The next lookup sees the changed file and
-rebuilds the index without it.
+`hint forget` is the opposite: for a wrong command, it saves `command  #
+WRONG: reason` to the wrong file. A line marked `# WRONG` in any history
+file drops that exact command from the index, from every source, and a
+model suggestion of it is labelled. `hint forget` also says where the
+command is still in your history, if you want to delete it there too.
 
 ## 3. Debugging a lookup
 
@@ -279,3 +280,4 @@ ranks the index for the words alone, without asking the model.
 | `~/.local/share/hintdb/man.db` | man page summaries |
 | `~/.local/share/hintdb/queries.jsonl` | the query log |
 | `~/.local/share/hintdb/answers` | answers saved by `hint remember` |
+| `~/.local/share/hintdb/wrong` | commands marked by `hint forget` |

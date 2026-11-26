@@ -33,6 +33,8 @@ DB, because dedup is global across sources.
                                                      TOOL command), for hint forget
   hintdb forget --where -- COMMAND                   the files and lines holding
                                                      COMMAND (nothing is changed)
+  hintdb forget --save [--reason R] -- COMMAND       mark COMMAND WRONG in the
+                                                     wrong file (used by hint forget)
 
 Query log: each `find` from the command line appends one JSON line (time,
 question, guesses, printed lines, each printed row's source files) to
@@ -41,6 +43,8 @@ question, guesses, printed lines, each printed row's source files) to
 Answers: `hint remember` appends `COMMAND  # QUESTION` lines to
 ~/.local/share/hintdb/answers, or HINTDB_ANSWERS (/dev/null turns it off).
 The file is a built-in source, read as history, whenever it exists.
+`hint forget` likewise appends `COMMAND  # WRONG...` lines to
+~/.local/share/hintdb/wrong, or HINTDB_WRONG.
 
 Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
 separate man.db, rebuilt only when man-db's index changes; used for the summary
@@ -60,6 +64,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 
 XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
@@ -68,6 +73,7 @@ DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
 LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
 ANSWERS = os.environ.get("HINTDB_ANSWERS", os.path.join(XDG_DATA, "hintdb", "answers"))
+WRONG = os.environ.get("HINTDB_WRONG", os.path.join(XDG_DATA, "hintdb", "wrong"))
 
 KINDS = ("history", "md", "text", "just", "make", "git", "alias")
 NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just",
@@ -957,11 +963,12 @@ def build_man():
 
 
 def all_files(srcs):
-    """The registered sources' files plus the built-in answers file, when it
-    exists (read as history)."""
+    """The registered sources' files plus the built-in answers and wrong
+    files, when they exist (read as history)."""
     files = expand(srcs)
-    if os.path.isfile(ANSWERS) and not any(p == ANSWERS for _, p in files):
-        files.append(("history", ANSWERS))
+    for builtin in (ANSWERS, WRONG):
+        if os.path.isfile(builtin) and not any(p == builtin for _, p in files):
+            files.append(("history", builtin))
     return files
 
 
@@ -1815,24 +1822,6 @@ def remember_candidate(tool=""):
     return pick_line(tool, "remember")
 
 
-FORGET_MARK = """\
-To stop hint showing it, add a comment to the end of one of these
-lines in a history file:  # WRONG!   (or  # WRONG: why)
-Or delete the lines, starting from the last one, so the line
-numbers above stay right."""
-
-FORGET_STEPS = """\
-For your bash history:
-  1. history -a        if your shell doesn't already run it after
-                       each command
-  2. edit the file and save it soon (other terminals keep appending)
-  3. in this terminal and every other open one, reload the file:
-      history -a; history -c; history -r
-     (the leading space keeps it out of history; don't use
-     history -n after an edit: it skips as many new lines as you
-     deleted)"""
-
-
 def forget_where(cmd):
     """Where the exact command is, in the live history (first, registered or
     not) and every file the index is built from. Returns (found, marked,
@@ -1874,31 +1863,64 @@ def forget_where(cmd):
 
 def forget_report(cmd):
     """The lines printed by `hintdb forget --where`, or None if not found."""
-    found, marked, has_live = forget_where(cmd)
+    found, marked, _ = forget_where(cmd)
     if not found and not marked:
         return None
     out = []
     if marked:
-        where = "; ".join(f"{tilde(p)} line {n}" for p, n in marked)
-        out.append(f"{norm(cmd)} is already marked WRONG, so hint does not show it: {where}")
-    if not found:
-        return out
-    names = [tilde(p) for p, _, _ in found]
-    width = max(len(n) for n in names)
-    out.append(f"{norm(cmd)} is in:" if not marked else "Unmarked copies:")
-    for name, (_, _, nums) in zip(names, found):
-        word = "line" if len(nums) == 1 else "lines"
-        out.append(f"  {name.ljust(width)}  {word} {', '.join(map(str, nums))}")
-    if marked:
-        out += ["", "hint hides these too; delete them only to clean up, starting from",
-                "the last one, so the line numbers above stay right."]
-    elif any(kind == "history" for _, kind, _ in found):
-        out += ["", FORGET_MARK]
-    else:
-        out += ["", "To remove it, delete those lines."]
-    if has_live:
-        out += ["", FORGET_STEPS]
+        out.append(marked_line(cmd, marked))
+    if found:
+        names = [tilde(p) for p, _, _ in found]
+        width = max(len(n) for n in names)
+        out.append(f"{norm(cmd)} is in:" if not marked else "Unmarked copies:")
+        for name, (_, _, nums) in zip(names, found):
+            word = "line" if len(nums) == 1 else "lines"
+            out.append(f"  {name.ljust(width)}  {word} {', '.join(map(str, nums))}")
     return out
+
+
+def marked_line(cmd, marked):
+    where = "; ".join(f"{tilde(p)} line {n}" for p, n in marked)
+    return f"{norm(cmd)} is already marked WRONG: {where}"
+
+
+def forget_save(cmd, reason):
+    """Append `COMMAND  # WRONG!` (or `# WRONG: REASON`) to the wrong file.
+    Returns (lines to print, error). Nothing is saved when the command is
+    already marked anywhere."""
+    cmd = split_comment(cmd.strip())[0]
+    reason = " ".join(reason.split())
+    if WRONG == os.devnull:
+        return None, "marks are off (HINTDB_WRONG=/dev/null)"
+    if not cmd or "\n" in cmd:
+        return None, "nothing to save: the command must be one line"
+    found, marked, has_live = forget_where(cmd)
+    if marked:
+        return None, marked_line(cmd, marked)
+    line = f"{cmd}  # WRONG: {reason}" if reason else f"{cmd}  # WRONG!"
+    try:
+        d = os.path.dirname(WRONG)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        fd = os.open(WRONG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            os.write(fd, (line + "\n").encode())
+        finally:
+            os.close(fd)
+    except OSError as e:
+        return None, f"cannot write {WRONG}: {e}"
+    out = [f"saved: {line}"]
+    if not found:
+        return out + ["hint now hides it."], None
+    where = "; ".join(f"{tilde(p)} {'line' if len(n) == 1 else 'lines'} {', '.join(map(str, n))}"
+                      for p, _, n in found)
+    text = f"hint now hides it. It is still in {where}"
+    text += " (up-arrow, Ctrl-R); " if has_live else "; "
+    text += "delete those lines to clean it up there too."
+    if has_live:
+        text += " See the README for editing history safely."
+    return out + textwrap.wrap(text, 72, break_on_hyphens=False, break_long_words=False), None
 
 
 def remember_save(question, cmd):
@@ -1972,7 +1994,12 @@ def main():
     fg = sub.add_parser("forget")
     fg.add_argument("--where", action="store_true",
                     help="list the files and lines holding COMMAND")
-    fg.add_argument("words", nargs="*", help="TOOL, or with --where the COMMAND")
+    fg.add_argument("--marked", action="store_true",
+                    help="exit 0 and say where, if COMMAND is already marked WRONG")
+    fg.add_argument("--save", action="store_true",
+                    help="append COMMAND  # WRONG! (or # WRONG: REASON) to the wrong file")
+    fg.add_argument("--reason", help="with --save")
+    fg.add_argument("words", nargs="*", help="TOOL, or with --where/--marked/--save the COMMAND")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
     q.add_argument("--no-update", action="store_true")
@@ -1999,11 +2026,24 @@ def main():
         if ANSWERS != os.devnull:
             state = "" if os.path.isfile(ANSWERS) else ", no answers yet"
             print(f"history\t{ANSWERS}\t(built in: hint remember{state})")
+        if WRONG != os.devnull:
+            state = "" if os.path.isfile(WRONG) else ", nothing marked yet"
+            print(f"history\t{WRONG}\t(built in: hint forget{state})")
     elif args.op == "remember" and args.save:
         err = remember_save(args.query or "", " ".join(args.words))
         if err:
             sys.exit("hintdb: " + err)
         print(f"hintdb: saved to {tilde(ANSWERS)}")
+    elif args.op == "forget" and args.save:
+        lines, err = forget_save(" ".join(args.words), args.reason or "")
+        if err:
+            sys.exit("hintdb: " + err)
+        print("\n".join(lines))
+    elif args.op == "forget" and args.marked:
+        found, marked, _ = forget_where(" ".join(args.words))
+        if not marked:
+            sys.exit(1)
+        print(marked_line(" ".join(args.words), marked))
     elif args.op == "forget" and args.where:
         lines = forget_report(" ".join(args.words))
         if lines is None:
@@ -2013,6 +2053,8 @@ def main():
     elif args.op == "forget":
         if len(args.words) > 1:
             sys.exit("hintdb: forget takes at most one TOOL")
+        if WRONG == os.devnull:
+            sys.exit("hintdb: marks are off (HINTDB_WRONG=/dev/null)")
         res, err = pick_line(args.words[0] if args.words else "", "forget")
         if err:
             sys.exit("hintdb: " + err)

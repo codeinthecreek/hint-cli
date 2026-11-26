@@ -5,7 +5,7 @@
 #   hint history tunnel        past questions containing "tunnel"
 #   hint search ssh            past answers containing "ssh"
 #   hint remember [TOOL]         save the command that answered the last question
-#   hint forget [TOOL]         where a wrong command is, to delete it
+#   hint forget [TOOL]         mark a wrong command, so hint never shows it
 #
 # 1. An LLM (Ollama chat API) guesses 1-3 commands for the request.
 # 2. hintdb find looks up the user's own history/notes rows for the request,
@@ -36,9 +36,9 @@ usage: hint <what you want to do>
        hint remember [TOOL]            save your last command (or your last
                                        TOOL command) as the answer to the
                                        last question, after you confirm it
-       hint forget [TOOL]              list where your last command (or your
-                                       last TOOL command) is in your sources,
-                                       to delete it there; changes nothing
+       hint forget [TOOL]              mark the first command after the last
+                                       question (or the first TOOL command)
+                                       WRONG, so hint never shows it again
        hint -H, --history [OPTIONS] [WORD...]
                                        past questions containing all WORDs
        hint -S, --search [OPTIONS] WORD...
@@ -184,11 +184,11 @@ remember() {
   hintdb remember --save -q "$q" -- "$line"
 }
 
-# forget [TOOL]   list the files and line numbers holding the last command
-# (or the last TOOL command), as edited, so the user can delete them.
-# Read-only: nothing is changed.
+# forget [TOOL]   mark the first command after the last question (or the
+# first TOOL command), as edited, WRONG in hint's own wrong file, with an
+# optional reason. hint then never shows it. No source is changed.
 forget() {
-  local cand n q where cmd line
+  local cand n q where cmd line reason
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
   cand=$(hintdb forget -- "$@") || exit 1
   { IFS=$'\t' read -r n q where; IFS= read -r cmd; } <<<"$cand"
@@ -198,9 +198,18 @@ forget() {
     echo "which command?" >&2
     [ -n "$q" ] && not_found_note
   fi
-  keys_help "Enter lists where it is" forget $#
-  edit_line "$cmd" changed
-  hintdb forget --where -- "$line"
+  keys_help "Enter marks it WRONG" forget $#
+  edit_line "$cmd" saved
+  hintdb forget --marked -- "$line" && exit 0
+  echo "reason (optional, Enter for none):" >&2
+  trap 'echo >&2; echo "hint: cancelled, nothing saved" >&2; exit 130' INT
+  if [ -t 0 ]; then
+    IFS= read -r -e -p '> ' reason || reason=
+  else
+    IFS= read -r reason || reason=
+  fi
+  trap - INT
+  hintdb forget --save --reason "$reason" -- "$line"
 }
 
 [ $# -gt 0 ] || usage

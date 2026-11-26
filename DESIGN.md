@@ -712,90 +712,109 @@ answers to questions.
 
 ## Forget
 
-Agreed and built 2026-11-26.
+First built 2026-11-26 as read-only (it listed where the command is, for
+the user to delete or mark it); changed the same day to save a WRONG mark
+to hint's own file (agreed and built). Both are described below,
+since the second rests on what the first found.
 
 - **Purpose:** a wrong line that keeps coming up (`history -n 10`: `-n`
   takes no count) feeds itself. It looks right, so it gets run, so it is
   in history once more, with a higher use count and a more trusted
   `xN`. Bash history has the same loop for up-arrow and Ctrl-R. The typo
   rule cannot catch it: the command is installed, and wrong flags cannot
-  be told without per-tool flag tables. `hint forget` shows where the line
-  is, so the user can delete it from the source.
-- **Read-only.** hint changes nothing: it lists the files and line
-  numbers, and the user edits them. Considered and not taken:
-  - a stored forget list that drops the line at every build: a line
-    wrong for one question may be right for another, and a mistaken
-    forget would hide it from every lookup with no sign it is missing;
-  - printing a `sed -i` command that removes the line from history
-    (tested, it works): the user chose safety over convenience, and a
-    generated pattern must escape every special character correctly.
-  Fixing the source also cleans bash's own history, which the other
-  options would not.
-- **Form:** `hint forget [TOOL]`, parsed like `hint remember`: a command when
-  at most one plain word follows, a question with two or more.
+  be told without per-tool flag tables. `hint forget` marks the command
+  WRONG (see "WRONG marker"), so hint stops showing it.
+- **Saves the mark to hint's own file, never edits a source.** `hint
+  forget` appends one line, `COMMAND  # WRONG!` or `COMMAND  # WRONG:
+  REASON`, to the wrong file: `HINTDB_WRONG`, default
+  `~/.local/share/hintdb/wrong` (`/dev/null` turns it off). Mode 0600, one
+  `O_APPEND` write under `flock`, as for the answers file. It is built in
+  like the answers file (included whenever it exists, read as history,
+  listed by `hintdb sources`), so the existing marker rule applies with no
+  new rule: the command is dropped from every source, and a model guess of
+  it is labelled. Undo: delete its line.
+  - **Why a file of its own**, not the answers file: each file holds what
+    one command saved (`cat` shows what was marked), no "answers" file
+    holding marks, and no remembered and marked copy of one command in
+    the same file.
+  - **How it got here:** first read-only, because the user chose safety
+    over convenience; considered then and not taken: a stored forget
+    list (a line wrong for one question may be right for another, and a
+    mistaken forget would hide it with no sign), and printing a `sed -i`
+    command to remove the line from history (it worked when tested, but a
+    generated pattern must escape every special character). The
+    read-only version listed the lines and printed the steps for editing
+    bash history safely; real use then showed that deleting the first of
+    several listed lines shifted the others, and the WRONG marker made
+    marking possible. With the marker, the stored list's objection no
+    longer holds: a mark says the command is wrong in itself, is listed
+    by `hintdb stats`, labels a model guess of it, and is undone by
+    deleting a line. Saving it to hint's own file needs no editing of
+    bash history at all (user, 2026-11-26: "save the mark to hint's own
+    file").
+- **Form:** `hint forget [TOOL]`, parsed like `hint remember`: a command
+  when at most one plain word follows, a question with two or more.
 - **Picking the line:** as for `hint remember` (see "Which line"), but the
   **first** line after the last question, or the first TOOL line: the
   suggestion that looked right and was run right after asking. Also the
-  check that the history file was written since the last lookup, when there
-  is one. A question is not required: with none in the log, or none found
-  in the file, the newest line is offered. The prompt says where it
-  started: `which command? the first after "hint QUESTION":`. The line is shown on an editable line, only to choose
-  it: so `hint forget history` plus an edit reaches a line that was not run
-  this time. Enter lists it; an empty line or Ctrl-C cancels. Nothing is
-  saved either way.
-- **Where it looks:** the live history first, registered as a source or
-  not (the line was just run there, and the bash steps are about it), then
-  every file the index is built from (the registered sources, the answers
-  file), including old and other machines' history files: they are listed
-  so the user knows, never touched. In history files
-  (and the answers file) a line matches when its command, without a
-  trailing `# comment` and with runs of spaces as one, equals the chosen
-  command. In other files a line matches when it contains the command
-  (spaces likewise), since notes put commands in code blocks or after `$ `.
-  Output: each file (home as `~`) with its line numbers. Nothing found:
-  says so and exits 1 (e.g. an edit to text that is in no file).
+  check that the history file was written since the last lookup, when
+  there is one. A question is not required: with none in the log, or none
+  found in the file, the newest line is offered. The prompt says where it
+  started: `which command? the first after "hint QUESTION":`. The line is
+  editable, so `hint forget history` plus an edit reaches a line that was
+  not run this time. Enter goes on; an empty line or Ctrl-C cancels.
+- **Reason:** a second prompt, `reason (optional, Enter for none):`. Enter
+  saves `# WRONG!`; a reason saves `# WRONG: REASON`. Ctrl-C cancels, and
+  nothing is saved.
+- **Already marked:** if the command is marked in any history-kind file
+  (the wrong file, bash history, another history, the answers file), hint
+  says where (`history -n 10 is already marked WRONG: ~/.bash_history line
+  43870`) and saves nothing.
 - **Exact line only.** The index merges lines of the same shape into one
   row, and hint may show the row as a template (`ssh ... user@<HOST>`).
-  `hint forget` works on one exact command; other lines of the same shape
-  stay and are listed only if they are that command.
-- **Bash steps, only when the live history is one of the files** (the
-  history file bash is writing, as for `hint remember`). Editing that file
-  while terminals are open needs care, so the steps are printed after the
-  file list; for any other file the line numbers are enough:
-  With the WRONG marker, the first line ("To remove it, delete those
-  lines.") is replaced by the suggestion to mark or delete them; see
-  "WRONG marker".
+  `hint forget` marks one exact command (runs of spaces as one); other
+  commands of the same shape stay.
+- **Output after saving, short:**
 
-      To remove it, delete those lines. For your bash history:
-        1. history -a        if your shell doesn't already run it after
-                             each command
-        2. edit the file and save it soon (other terminals keep appending)
-        3. in this terminal and every other open one, reload the file:
-            history -a; history -c; history -r
-           (the leading space keeps it out of history; don't use
-           history -n after an edit: it skips as many new lines as you
-           deleted)
+      saved: history -n 10  # WRONG: -n takes no count
+      hint now hides it. It is still in ~/.bash_history lines 2, 4
+      (up-arrow, Ctrl-R); delete those lines to clean it up there too.
+      See the README for editing history safely.
 
-  Why each step (tested 2026-11-26, two interactive bash 5.3 shells under
-  pseudo-terminals sharing one file, `histappend`, `PROMPT_COMMAND="history
-  -a"`): `history -a` first, or the session's unwritten lines are lost by
-  the reload; an editor open on the file overwrites lines other terminals
-  append meanwhile (vim warns, other editors may not); a shell keeps a
-  removed line in memory until reloaded, but with `histappend` does not
-  write it back. Bash counts the lines of the file it has read: after k
-  lines were deleted, `history -n` in another terminal skipped the next k
-  new lines (they stay in the file but never reach that terminal), while
-  `history -c; history -r` loaded every line and none of the deleted ones.
-  The leading space relies on `ignorespace` (in `ignoreboth`); without it
-  the reload line is saved, which is harmless. The steps name plain bash
-  commands, not aliases a user may have for them.
-- **Afterwards:** the edited file has changed, so the next lookup rebuilds
-  the index without the line. No new file, no stored state, no schema bump.
-- **Limits:** a Makefile recipe joined from `\` lines is not found (the
-  file holds it in pieces). Matching other files by substring can list a
-  longer line that contains the command; the user sees it and leaves it.
-- **Tests** use fixture sources and a scratch copy of a history file;
-  `HISTFILE` decides whether the bash steps are printed.
+  The "still in" lines list the copies in the live history and in the
+  registered sources, found as the read-only version did: in history-kind
+  files a line whose command (comment dropped, runs of spaces as one)
+  equals the chosen one; in other files a line containing it (notes put
+  commands in code blocks or after `$ `). The live history comes first,
+  registered or not. With no copies anywhere, only the first two lines
+  are printed. The full steps for editing bash history moved to the
+  README: printed after every mark they were long for something optional.
+- **Editing bash history safely** (now in the README; tested 2026-11-26,
+  two interactive bash 5.3 shells under pseudo-terminals sharing one file,
+  `histappend`, `PROMPT_COMMAND="history -a"`):
+  1. `history -a` first, or the session's unwritten lines are lost by the
+     reload;
+  2. edit the file and save it soon: an editor open on the file overwrites
+     lines other terminals append meanwhile (vim warns, other editors may
+     not);
+  3. in this terminal and every other open one, ` history -a; history -c;
+     history -r` (leading space: not saved, with `ignorespace`). A shell
+     keeps a removed line in memory until reloaded, but with `histappend`
+     does not write it back. Bash counts the lines of the file it has
+     read: after k lines were deleted, `history -n` in another terminal
+     skipped the next k new lines (they stay in the file but never reach
+     that terminal), while `history -c; history -r` loaded every line and
+     none of the deleted ones. Delete from the last listed line up, so the
+     other line numbers stay right.
+  The steps name plain bash commands, not aliases a user may have.
+- **Afterwards:** the wrong file has changed, so the next lookup rebuilds
+  the index without the command. `hintdb forget --where` stays for the
+  listing (debugging, and the "still in" line).
+- **Limits:** a Makefile recipe joined from `\` lines is not found in the
+  listing (the file holds it in pieces). Matching other files by
+  substring can list a longer line that contains the command.
+- **Tests** use fixture sources, a scratch history file, and
+  `HINTDB_WRONG` in the scratch directory.
 
 ## WRONG marker
 
@@ -807,7 +826,8 @@ Agreed and built 2026-11-26.
   different case: `hint remember` puts the question's words on the right
   command instead, and nothing is hidden (user, 2026-11-26).
 - **The mark:** a trailing comment on a line in a history-kind file (bash
-  history, other history files, the answers file) whose text starts with
+  history, other history files, the answers file, and the wrong file that
+  `hint forget` writes) whose text starts with
   `WRONG` as a whole word, in capitals: followed by the end of the
   comment, punctuation or a space. So `history -n 10  # WRONG!`, `# WRONG`
   and `# WRONG: -n takes no count` mark the command, with room for a
@@ -851,20 +871,12 @@ Agreed and built 2026-11-26.
   usually right, only the command is wrong. When no installed command was
   found, the model's list says `(WRONG!, marked by you)` after it.
   `--debug` names marked guesses. The marks are kept in the index's meta.
-- **In `hint forget`:** it lists only the lines without the mark. When the
-  command is already marked, it says so on one line (`already marked
-  WRONG, so hint does not show it: ~/.bash_history line 43870`), so the
-  mark can be found to undo it, and says that deleting the unmarked copies
-  is only cleanup (hint hides them too). When any listed line is in a history-kind file, it suggests marking
-  as the alternative to deleting:
-
-      To stop hint showing it, add a comment to the end of one of these
-      lines in a history file:  # WRONG!   (or  # WRONG: why)
-      Or delete the lines, starting from the last one, so the line
-      numbers above stay right.
-
-  followed by the bash steps when the live history is one of the files
-  (see Forget): either change is an edit of that file.
+- **In `hint forget`:** it saves the mark to hint's own wrong file (see
+  Forget). When the command is already marked anywhere, it says where, so
+  the mark can be found to undo it, and saves nothing. (The read-only
+  version suggested adding `# WRONG!` to a history line by hand, or
+  deleting the lines from the last one up.) A mark added by hand to a
+  history line works the same as one saved by `hint forget`.
 - **Tests:** marks in fixture history lines (`# WRONG`, `# WRONG!`,
   `# WRONG: reason`, and the near misses above), a copy of the command in
   a notes file and another history file, `hintdb stats`, `hint forget`.
