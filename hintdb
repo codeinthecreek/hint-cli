@@ -716,7 +716,7 @@ def expand(srcs):
 
 
 # Bump when the index layout or cleaning rules change, so existing DBs rebuild.
-SCHEMA_VERSION = "16"
+SCHEMA_VERSION = "17"
 
 
 def fingerprint(files):
@@ -732,7 +732,35 @@ def fingerprint(files):
 # ---------------------------------------------------------------- build
 
 
+# A history line whose trailing comment starts with WRONG as a whole word
+# (capitals; then the end, punctuation or a space) marks its command as
+# wrong in itself: `history -n 10  # WRONG!`, `# WRONG: -n takes no count`.
+WRONG_MARK = re.compile(r"WRONG(?![A-Za-z0-9_])")
+
+
+def is_wrong_mark(note):
+    return bool(WRONG_MARK.match(note.strip()))
+
+
+def wrong_marks(files):
+    """{command: [(file, line number, comment)]} for the marked lines of the
+    history-kind files (runs of spaces in the command as one)."""
+    marks = {}
+    for kind, path in files:
+        if kind != "history":
+            continue
+        try:
+            for i, line in enumerate(read_lines(path), 1):
+                cmd, note = split_comment(line)
+                if cmd and is_wrong_mark(note):
+                    marks.setdefault(norm(cmd), []).append((path, i, note.strip()))
+        except OSError:
+            continue
+    return marks
+
+
 def build(files):
+    marks = wrong_marks(files)   # commands never indexed, from any source
     groups = {}   # shape -> group dict
     exact = {}    # normalized cmd -> [count, last_seen, kind]
     aliases = set()   # bash alias names: count as installed, like commands on PATH
@@ -748,6 +776,8 @@ def build(files):
             if not cmd or SECRET.search(cmd):
                 continue
             if os.path.basename(first_word(cmd)) in IGNORE_CMDS:
+                continue
+            if cmd in marks:
                 continue
             if is_trivial(cmd) and not note:
                 continue
@@ -819,7 +849,9 @@ def build(files):
                      json.dumps(sorted(g["sources"]))))
 
     write_db(DB, ENTRIES_SCHEMA, ENTRIES_INSERT, rows, fingerprint(files),
-             {"aliases": json.dumps(sorted(aliases))})
+             {"aliases": json.dumps(sorted(aliases)),
+              "wrong": json.dumps(sorted([c, p, n, note] for c, ms in marks.items()
+                                         for p, n, note in ms))})
     return len(rows)
 
 
@@ -1760,8 +1792,14 @@ def remember_candidate(tool=""):
     return pick_line(tool, "remember")
 
 
+FORGET_MARK = """\
+To stop hint showing it, add a comment to the end of one of these
+lines in a history file:  # WRONG!   (or  # WRONG: why)
+Or delete the lines, starting from the last one, so the line
+numbers above stay right."""
+
 FORGET_STEPS = """\
-To remove it, delete those lines. For your bash history:
+For your bash history:
   1. history -a        if your shell doesn't already run it after
                        each command
   2. edit the file and save it soon (other terminals keep appending)
@@ -1774,14 +1812,16 @@ To remove it, delete those lines. For your bash history:
 
 def forget_where(cmd):
     """Where the exact command is, in the live history (first, registered or
-    not) and every file the index is built from: [(file, [line numbers])],
-    and whether the live history is one of them. History-kind files match the line's command
-    (comment dropped, spaces as one); other files a line containing it."""
+    not) and every file the index is built from. Returns (found, marked,
+    has_live): found = [(file, kind, [line numbers])] of the lines without
+    a WRONG mark, marked = [(file, line number)] of the lines with one.
+    History-kind files match the line's command (comment dropped, spaces as
+    one); other files a line containing it."""
     want = norm(cmd)
     live = os.path.realpath(live_history())
     # The live history first: the bash steps printed below are about it.
     files = [("history", live_history())] + all_files(load_sources())
-    found, seen, has_live = [], set(), False
+    found, marked, seen, has_live = [], [], set(), False
     for kind, path in files:
         real = os.path.realpath(path)
         if real in seen:
@@ -1791,27 +1831,48 @@ def forget_where(cmd):
             lines = list(read_lines(path))
         except OSError:
             continue
-        if kind == "history":
-            nums = [i for i, l in enumerate(lines, 1) if norm(split_comment(l)[0]) == want]
-        else:
-            nums = [i for i, l in enumerate(lines, 1) if want in norm(l)]
+        nums = []
+        for i, line in enumerate(lines, 1):
+            if kind == "history":
+                c, note = split_comment(line)
+                if norm(c) != want:
+                    continue
+                if is_wrong_mark(note):
+                    marked.append((path, i))
+                    continue
+            elif want not in norm(line):
+                continue
+            nums.append(i)
         if nums:
-            found.append((path, nums))
+            found.append((path, kind, nums))
             has_live = has_live or real == live
-    return found, has_live
+    return found, marked, has_live
 
 
 def forget_report(cmd):
     """The lines printed by `hintdb forget --where`, or None if not found."""
-    found, has_live = forget_where(cmd)
-    if not found:
+    found, marked, has_live = forget_where(cmd)
+    if not found and not marked:
         return None
-    names = [tilde(p) for p, _ in found]
+    out = []
+    if marked:
+        where = "; ".join(f"{tilde(p)} line {n}" for p, n in marked)
+        out.append(f"{norm(cmd)} is already marked WRONG, so hint does not show it: {where}")
+    if not found:
+        return out
+    names = [tilde(p) for p, _, _ in found]
     width = max(len(n) for n in names)
-    out = [f"{norm(cmd)} is in:"]
-    for name, (_, nums) in zip(names, found):
+    out.append(f"{norm(cmd)} is in:" if not marked else "Unmarked copies:")
+    for name, (_, _, nums) in zip(names, found):
         word = "line" if len(nums) == 1 else "lines"
         out.append(f"  {name.ljust(width)}  {word} {', '.join(map(str, nums))}")
+    if marked:
+        out += ["", "hint hides these too; delete them only to clean up, starting from",
+                "the last one, so the line numbers above stay right."]
+    elif any(kind == "history" for _, kind, _ in found):
+        out += ["", FORGET_MARK]
+    else:
+        out += ["", "To remove it, delete those lines."]
     if has_live:
         out += ["", FORGET_STEPS]
     return out
@@ -1968,6 +2029,15 @@ def main():
             con.close()
         for path, (n, own) in per:
             print(f"{tilde(path)}\t{n} {'entry' if n == 1 else 'entries'}, {own} only from this source")
+        con = sqlite3.connect(DB)
+        row = con.execute("SELECT value FROM meta WHERE key='wrong'").fetchone()
+        con.close()
+        marks = json.loads(row[0]) if row else []
+        if marks:
+            print("marked WRONG (never shown by hint):")
+            width = max(len(c) for c, _, _, _ in marks)
+            for c, p, n, note in marks:
+                print(f"  {c.ljust(width)}  {tilde(p)} line {n}: {note}")
     elif args.op == "find":
         if not args.no_update:
             update()

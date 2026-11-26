@@ -991,6 +991,54 @@ out=$(printf '\n' | A hint remember 2>&1)
 has "hint remember: question not in history: says the newest is offered" "$out" \
   "(your last question is not in your history file: this is your newest command)"
 
+echo "== WRONG marker"
+# Own sources and index: a history with marks and near misses, a notes
+# file with a copy of a marked command.
+wh="$tmp/wrong-history" wn="$tmp/wrong-notes.md"
+printf '%s\n' 'fakess -n 10' 'fakess -n 10  # WRONG!' 'fakess -n' 'fakess -r  # WRONG: -r is not a flag' \
+  'fakess -b  # WRONG' 'fakess -p  # WRONG permissions fixed' 'fakess -w  # Wrong!' \
+  'fakess -z  # WRONGLY named' 'fakess -q  # fix wrong permissions' 'fakess -n   10' > "$wh"
+printf '%s\n' '# Sockets' '' '```bash' 'fakess -n 10' 'fakess -l' '```' > "$wn"
+printf 'history\t%s\nauto\t%s\n' "$wh" "$wn" > "$tmp/wrong-sources"
+W() { HISTFILE="$wh" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/wrong-sources" \
+      HINTDB_ANSWERS="$tmp/none" HINTDB_DB="$tmp/wrong.db" HINTDB_NO_MAN=1 "$@"; }
+W hintdb rebuild >/dev/null
+widx=$(python3 - "$tmp/wrong.db" <<'EOF2'
+import sqlite3, sys
+for (v,) in sqlite3.connect(sys.argv[1]).execute("SELECT display FROM entries"):
+    print(v)
+EOF2
+)
+lacks "WRONG!: the command is not indexed" "$widx" "fakess -n 10"
+lacks "WRONG: reason: not indexed" "$widx" "fakess -r"
+lacks "bare WRONG: not indexed" "$widx" "fakess -b"
+lacks "WRONG then a word: still a mark" "$widx" "fakess -p"
+has "another command of the same tool stays" "$widx" "fakess -n"
+has "Wrong! (not capitals) is a note, not a mark" "$widx" "fakess -w"
+has "WRONGLY (not a whole word) is a note, not a mark" "$widx" "fakess -z"
+has "wrong later in the comment is a note, not a mark" "$widx" "fakess -q"
+has "the notes file's other command stays" "$widx" "fakess -l"
+out=$(W hintdb stats 2>&1)
+has "stats: lists marked commands" "$out" "marked WRONG (never shown by hint):"
+has "stats: each mark with file, line and comment" "$(tr -s ' ' <<<"$out")" " fakess -r $wh line 4: WRONG: -r is not a flag"
+
+out=$(W hintdb forget --where -- 'fakess -n 10' 2>&1)
+has "forget: says the command is already marked, and where" "$out" \
+  "fakess -n 10 is already marked WRONG, so hint does not show it: $wh line 2"
+has "forget: lists the unmarked copies (spaces as one), not the marked line" "$(tr -s ' ' <<<"$out")" " $wh lines 1, 10"
+has "forget: the notes copy is listed" "$(tr -s ' ' <<<"$out")" " $wn line 4"
+has "forget: already marked: deleting is only cleanup" "$out" "hint hides these too"
+lacks "forget: already marked: no suggestion to mark" "$out" "add a comment to the end"
+out=$(W hintdb forget --where -- 'fakess -n' 2>&1)
+has "forget: unmarked command: suggests the mark" "$out" "lines in a history file:  # WRONG!   (or  # WRONG: why)"
+has "forget: unmarked command: or delete from the last line" "$out" "Or delete the lines, starting from the last one"
+has "forget: bash steps still follow" "$out" " history -a; history -c; history -r"
+out=$(W hintdb forget --where -- 'fakess -l' 2>&1)
+has "forget: only in a notes file: delete the line" "$out" "To remove it, delete those lines."
+lacks "forget: only in a notes file: no mark suggestion" "$out" "# WRONG!"
+sed -i 's/  # WRONG!$//' "$wh"
+has "removing the mark brings the command back" "$(W hintdb query -n 30 fakess 2>&1)" "fakess -n 10"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

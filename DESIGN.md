@@ -762,6 +762,9 @@ Agreed and built 2026-11-26.
   history file bash is writing, as for `hint remember`). Editing that file
   while terminals are open needs care, so the steps are printed after the
   file list; for any other file the line numbers are enough:
+  With the WRONG marker, the first line ("To remove it, delete those
+  lines.") is replaced by the suggestion to mark or delete them; see
+  "WRONG marker".
 
       To remove it, delete those lines. For your bash history:
         1. history -a        if your shell doesn't already run it after
@@ -793,6 +796,68 @@ Agreed and built 2026-11-26.
   longer line that contains the command; the user sees it and leaves it.
 - **Tests** use fixture sources and a scratch copy of a history file;
   `HISTFILE` decides whether the bash steps are printed.
+
+## WRONG marker
+
+Agreed and built 2026-11-26.
+
+- **Purpose:** a command that is wrong in itself (`history -n 10`: `-n`
+  takes no count) is marked where it is, and hint stops showing it for
+  every question. A command that is right but not for this question is a
+  different case: `hint remember` puts the question's words on the right
+  command instead, and nothing is hidden (user, 2026-11-26).
+- **The mark:** a trailing comment on a line in a history-kind file (bash
+  history, other history files, the answers file) whose text starts with
+  `WRONG` as a whole word, in capitals: followed by the end of the
+  comment, punctuation or a space. So `history -n 10  # WRONG!`, `# WRONG`
+  and `# WRONG: -n takes no count` mark the command, with room for a
+  reason; `# fix wrong permissions` and `# Wrong!` do not. `# WRONG
+  permissions fixed` does: capitals at the start of a comment are the
+  signal, not the words after.
+- **Not taken:**
+  - free words such as "wrong", "broken", "doesn't work" anywhere in a
+    comment: `chmod -R u+w dir  # fix wrong permissions` uses the word
+    for the problem, not the command;
+  - a comment line typed at the prompt (`# WRONG: history -n 10`; tested:
+    bash saves it and runs nothing, not even `$(...)` or redirections in
+    it): the user found it unnatural, and marks are added while editing
+    the history file anyway, from `hint forget`'s line numbers;
+  - marks in notes files: notes are the user's own files, and deleting
+    the line there is simple;
+  - pushing a marked command down instead of dropping it: a command wrong
+    in itself has no good place in the list.
+- **Effect** (a cleaning rule, so `SCHEMA_VERSION` is bumped): the build
+  first collects the marked commands (the command part of each marked
+  line, runs of spaces as one), then skips every line, from every source
+  and of every kind, whose command is marked. Exact command only: other
+  commands of the same shape stay (`history -n` when `history -n 10` is
+  marked). Copies run later are dropped too, which breaks the loop of a
+  wrong line coming back every time it is run.
+- **Why mark rather than delete:** the mark stays next to the command,
+  with its reason (Ctrl-R shows it); running it again does not bring it
+  back; one marked copy is enough; and the line numbers `hint forget`
+  printed stay right. Deleting a line shifts every later line up: the
+  user deleted the first of several listed lines and the others were then
+  wrong (2026-11-26).
+- **A trace:** `hintdb stats` lists the marked commands, each with the
+  file and line of its mark and the reason. Undo: remove the comment.
+- **In `hint forget`:** it lists only the lines without the mark. When the
+  command is already marked, it says so on one line (`already marked
+  WRONG, so hint does not show it: ~/.bash_history line 43870`), so the
+  mark can be found to undo it, and says that deleting the unmarked copies
+  is only cleanup (hint hides them too). When any listed line is in a history-kind file, it suggests marking
+  as the alternative to deleting:
+
+      To stop hint showing it, add a comment to the end of one of these
+      lines in a history file:  # WRONG!   (or  # WRONG: why)
+      Or delete the lines, starting from the last one, so the line
+      numbers above stay right.
+
+  followed by the bash steps when the live history is one of the files
+  (see Forget): either change is an edit of that file.
+- **Tests:** marks in fixture history lines (`# WRONG`, `# WRONG!`,
+  `# WRONG: reason`, and the near misses above), a copy of the command in
+  a notes file and another history file, `hintdb stats`, `hint forget`.
 
 ## Known limitations
 

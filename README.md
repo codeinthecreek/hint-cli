@@ -209,11 +209,26 @@ hint forget history
 ```
 
 hint lists each file and line number that holds the command, and changes
-nothing: you delete the lines yourself. When one of them is your bash
-history, it also prints the steps for editing that file safely while other
-terminals are open. The main one: afterwards, reload the history in every
-open terminal with `history -a; history -c; history -r`. Don't use
-`history -n` then; it skips as many new lines as you deleted.
+nothing: you edit the files yourself. In a history file you can either
+delete the lines, or mark the command as wrong by adding a comment to the
+end of one of them:
+
+```text
+history -n 10  # WRONG!
+```
+
+A comment that starts with `WRONG` as a whole word, in capitals, marks the
+command: `# WRONG`, `# WRONG!`, or with a reason, `# WRONG: -n takes no
+count`. hint then never shows that exact command again, from any source,
+even after you run it again. Other commands stay, such as `history -n`. To
+undo it, remove the comment. `hintdb stats` lists the commands you have
+marked.
+
+When one of the files is your bash history, `hint forget` also prints the
+steps for editing it safely while other terminals are open. The main one:
+afterwards, reload the history in every open terminal with `history -a;
+history -c; history -r`. Don't use `history -n` then; it skips as many new
+lines as you deleted.
 
 ### Past lookups
 

@@ -97,8 +97,9 @@ index (`hint.db`).
 | answers (`hint remember`) | every line | the question it answered |
 
 **What is dropped:** trivial commands (`ls`, `cd`, `vim file`, ...) unless they
-carry a note, lines that look like secrets, `hint` and `hintdb` themselves, and
-probable typos (a one-off command that isn't on your `PATH`).
+carry a note, lines that look like secrets, `hint` and `hintdb` themselves,
+probable typos (a one-off command that isn't on your `PATH`), and commands
+you marked as wrong with a `# WRONG` comment on one of their history lines.
 
 **Merging repeats.** Commands that differ only in their values are one row.
 Values become placeholders, while flags are kept as you wrote them:
