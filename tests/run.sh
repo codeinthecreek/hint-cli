@@ -1039,6 +1039,24 @@ lacks "forget: only in a notes file: no mark suggestion" "$out" "# WRONG!"
 sed -i 's/  # WRONG!$//' "$wh"
 has "removing the mark brings the command back" "$(W hintdb query -n 30 fakess 2>&1)" "fakess -n 10"
 
+# A model guess the user marked WRONG: labelled, and printed after the others.
+printf '%s\n' 'fakess -b  # WRONG' 'fakess -n 10' 'fakess -n 10  # WRONG: -n takes no count' > "$tmp/wrong-history2"
+printf 'history\t%s\n' "$tmp/wrong-history2" > "$tmp/wrong-sources2"
+W2() { HINTDB_SOURCES="$tmp/wrong-sources2" HINTDB_ANSWERS="$tmp/none" HINTDB_DB="$tmp/wrong2.db" \
+       HINTDB_NO_MAN=1 HINTDB_LOG=/dev/null "$@"; }
+out=$(W2 hintdb find -q "list sockets" "fakess -n 10" "fakess -l" 2>&1)
+line "marked guess: not first" "$out" 1 "fakess -l"
+line "marked guess: after the other guesses" "$out" 3 "fakess -n 10"
+line "marked guess: labelled with the user's mark" "$out" 4 \
+  "  # WRONG: -n takes no count (model suggestion, marked by you)"
+has "marked guess: shown in --debug" "$(W2 hintdb find --debug -q "list sockets" "fakess -n 10" 2>&1 >/dev/null)" \
+  "marked WRONG by the user, printed last: fakess -n 10"
+has "marked guess: a bare mark is shown as WRONG" "$(W2 hintdb find -q "list sockets" "fakess -b" 2>&1)" \
+  "  # WRONG (model suggestion, marked by you)"
+printf '%s\n' 'zzqqtool -x  # WRONG!' >> "$tmp/wrong-history2"
+has "marked guess, tool not installed: marked in the model's list" \
+  "$(W2 hintdb find -q "frobnicate the widget" "zzqqtool -x" 2>&1)" "#   zzqqtool -x   (WRONG!, marked by you)"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

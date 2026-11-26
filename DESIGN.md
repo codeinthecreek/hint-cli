@@ -841,6 +841,16 @@ Agreed and built 2026-11-26.
   wrong (2026-11-26).
 - **A trace:** `hintdb stats` lists the marked commands, each with the
   file and line of its mark and the reason. Undo: remove the comment.
+- **When the model suggests a marked command** (added 2026-11-26, from
+  real use: the mark removed the user's row, and the model then printed
+  `history -n 10` second, as a plain suggestion): the guess is printed
+  after the other guesses, never first or second, labelled with the mark's
+  comment first, so it reads as a verdict and a reason shows: `# WRONG!
+  (model suggestion, marked by you)`, `# WRONG: -n takes no count (model
+  suggestion, marked by you)`. Its tool, flags and words still guide the search: the tool is
+  usually right, only the command is wrong. When no installed command was
+  found, the model's list says `(WRONG!, marked by you)` after it.
+  `--debug` names marked guesses. The marks are kept in the index's meta.
 - **In `hint forget`:** it lists only the lines without the mark. When the
   command is already marked, it says so on one line (`already marked
   WRONG, so hint does not show it: ~/.bash_history line 43870`), so the

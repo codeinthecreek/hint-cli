@@ -1288,6 +1288,18 @@ def open_db():
     return sqlite3.connect(DB)
 
 
+def wrong_of(con):
+    """{command: the comment of its first WRONG mark} from the index's meta."""
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key='wrong'").fetchone()
+    except sqlite3.Error:
+        return {}
+    out = {}
+    for c, _, _, note in json.loads(row[0]) if row else []:
+        out.setdefault(c, note)
+    return out
+
+
 def find(text, guesses, debug=False, rows=None):
     """The user's rows for the question `text`, scored by bm25 of its words
     plus the guesses' tools, flags and words; then the model's guesses. Two
@@ -1300,6 +1312,7 @@ def find(text, guesses, debug=False, rows=None):
 
     guesses = list(dict.fromkeys(g for g in (norm(x) for x in guesses) if g))
     con = open_db()
+    marked = wrong_of(con)   # commands the user marked WRONG: {command: comment}
     try:
         row = con.execute("SELECT value FROM meta WHERE key='aliases'").fetchone()
         ALIASES.update(json.loads(row[0]) if row else [])
@@ -1354,6 +1367,13 @@ def find(text, guesses, debug=False, rows=None):
             rows.extend(miss)
 
         theirs = [g for g in guesses if installed(tool_of(g)) and shape(g) not in shapes]
+        # A guess the user marked WRONG: never first or second, printed after
+        # the other guesses with the mark (its tool and words still guide the
+        # search above).
+        wrong = [g for g in theirs if norm(g) in marked]
+        theirs = [g for g in theirs if norm(g) not in marked]
+        if wrong:
+            dbg("marked WRONG by the user, printed last: " + "; ".join(wrong))
         # Who leads: the user's best row, when it holds more than half the
         # question's words (by rarity); otherwise the model's first guess.
         half = 0.0
@@ -1390,8 +1410,10 @@ def find(text, guesses, debug=False, rows=None):
         label = "model suggestion" if mine else "alternative (model suggestion)"
         for g in rest:
             out += [g, "  # " + label]
+        for g in wrong:
+            out += [g, f"  # {marked[norm(g)]} (model suggestion, marked by you)"]
         seen = set()
-        for g in theirs:
+        for g in theirs + wrong:
             t = tool_of(g)
             page = man_page(con, t) if t not in seen else None
             seen.add(t)
@@ -1405,7 +1427,8 @@ def find(text, guesses, debug=False, rows=None):
         out.extend("#   " + d for d in m["rows"])
     if not out and guesses:
         out.append("# no installed command found; the model suggested the following:")
-        out.extend("#   " + g for g in guesses)
+        out.extend("#   " + g + (f"   ({marked[norm(g)]}, marked by you)" if norm(g) in marked else "")
+                   for g in guesses)
     return out
 
 def source_counts(con):
