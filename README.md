@@ -158,27 +158,124 @@ A comment on a command makes it findable by what it does, next time:
 ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 ```
 
+### When hint didn't find it
+
+If hint missed and you found the command some other way, run it, then tell
+hint it was the answer:
+
+```bash
+hint remember
+```
+
+hint shows your last question and the last command you ran after it, on a
+line you can edit. Press Enter to save it, or Ctrl-C to cancel. The question is saved as
+a comment on the command, so the next similar question finds it, even if
+the model guesses the wrong tool again.
+
+If you ran other commands after the right one, name its tool instead. This
+takes the last line since your question that runs `ss`, also inside a
+pipeline:
+
+```bash
+hint remember ss
+```
+
+`hint remember` reads your history file, so the command has to be written to
+it first. With `history -a` in `PROMPT_COMMAND` (see Install) it always is.
+Without it, for example on a server, write it first:
+
+```bash
+history -a; hint remember
+```
+
+Answers are kept in `~/.local/share/hintdb/answers`, one `command  #
+question` line each. To change or remove one, edit that file.
+
+### Removing a wrong command
+
+A wrong command that looks right, such as `history -n 10` (`-n` takes no
+count), keeps coming back: each time you run it, it is in your history
+once more. After trying it, mark it as wrong. hint takes the first command
+you ran after your last question:
+
+```bash
+hint forget
+```
+
+Or name its tool, to take the first line since your question that runs it:
+
+```bash
+hint forget history
+```
+
+If you haven't run anything since the question (you saw it was wrong in
+hint's answer), `hint forget` lists the commands that answer printed,
+numbered, and you choose one, so a wrong suggestion is marked without
+running it.
+
+hint shows the command on a line you can edit, then asks for an optional
+reason, and saves it to `~/.local/share/hintdb/wrong` as a marked line:
+
+```text
+history -n 10  # WRONG: -n takes no count
+```
+
+hint then never shows that exact command again, from any of your sources,
+even after you run it again, and labels it when the model suggests it.
+Other commands stay, such as `history -n`. `hintdb stats` lists the
+commands you have marked. To undo a mark, delete its line from that file.
+
+The same comment works in your own files: a comment that starts with
+`WRONG` as a whole word, in capitals, on a line in your bash history marks
+the command too: `# WRONG`, `# WRONG!` or `# WRONG: reason`.
+
+#### Cleaning it out of your bash history
+
+`hint forget` doesn't change your bash history, so the command is still
+there for up-arrow and Ctrl-R. It tells you the line numbers. To delete
+them while other terminals are open:
+
+1. Write this terminal's history to the file first, unless your shell does
+   it after each command:
+
+   ```bash
+   history -a
+   ```
+
+2. Edit the file, delete the lines from the last one up (so the other line
+   numbers stay right), and save soon: other terminals keep appending to
+   it.
+3. In this terminal and every other open one, reload the history. The
+   leading space keeps the line itself out of history:
+
+   ```bash
+    history -a; history -c; history -r
+   ```
+
+   Don't use `history -n` after an edit: it skips as many new lines as you
+   deleted.
+
 ### Past lookups
 
 Every lookup is kept in a local query log, and these commands read it
 without asking the model.
 
-The last 10 lookups, like bash `history`:
+The last 10 lookups, like bash `history`; add a number for more:
 
 ```bash
 hint history
 ```
 
-Past questions containing a word:
-
 ```bash
-hint history tunnel
+hint history 30
 ```
 
-Commands you were given that contain a word:
+Past lookups containing a word, in the question or in a command they
+showed you, like `history | grep` in bash. A command that matched is shown
+under its lookup:
 
 ```bash
-hint search rsync
+hint grep rsync
 ```
 
 The full answer of lookup 57, with the files each of your rows came from:
@@ -193,12 +290,14 @@ Delete lookups you didn't mean, like bash `history -d`:
 hint history --delete 41,42
 ```
 
-`history` and `search` take at most one word. With two or more words the
-line is a question for the model, so `hint history without duplicates` is
-asked as usual. To search for several words, use `-H` or `-S`:
+`grep` takes one word, and a number is a word: `hint grep 5432` finds the
+lookup that showed a command with port 5432. With two or more words the
+line is a question for the model, so `hint grep recursively for a word` is
+asked as usual. To look for several words, quote them; each word must
+match:
 
 ```bash
-hint -H ssh key
+hint grep "ssh key"
 ```
 
 ## Configuration
@@ -215,6 +314,9 @@ hint -H ssh key
 | `HINTDB_SOURCES` | `~/.config/hintdb/sources` | list of sources |
 | `HINTDB_APROPOS` | `apropos .` | command that lists man page summaries (for testing) |
 | `HINTDB_LOG` | `~/.local/share/hintdb/queries.jsonl` | query log; `/dev/null` turns it off |
+| `HINTDB_ANSWERS` | `~/.local/share/hintdb/answers` | answers saved by `hint remember`; `/dev/null` turns them off |
+| `HINTDB_WRONG` | `~/.local/share/hintdb/wrong` | commands marked by `hint forget`; `/dev/null` turns it off |
+| `HISTFILE` | `~/.bash_history` | the history `hint remember` reads; export it if yours is elsewhere |
 
 The query log stays on your machine, like your shell history, and contains
 commands from it.
@@ -236,16 +338,15 @@ commands from it.
 
 | Form or option | Meaning |
 |---|---|
-| `-H`, `--history [WORD...]` | past questions containing all WORDs (no words: every lookup) |
-| `-S`, `--search WORD...` | past commands containing all WORDs |
-| `-n`, `--last N` | only the last N matching lines (default 10) |
-| `-c`, `--count` | print the number of matching lines instead |
-| `-s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
-| `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
+| `history [N]` | your last 10 lookups, or the last N |
+| `history -s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
+| `history -d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
+| `grep [-c] WORD` | past lookups whose question or commands contain WORD; `-c`: just the number |
+| `remember [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
+| `forget [TOOL]` | mark the first command after your last question, or the first TOOL command, as wrong, so hint never shows it |
 
-`-n` and `-c` work after `history`, `search`, `-H` and `-S`. `--show` and
-`--delete` work only after `history` and `-H`, on their own. `hint help`
-prints the usage; `hint help me ...` is a question.
+`--show` and `--delete` stand alone. `hint help` prints the usage; `hint
+help me ...` is a question.
 
 ### hintdb commands
 
@@ -259,7 +360,10 @@ prints the usage; `hint help me ...` is a question.
 | `hintdb stats` | rows per kind and per source file (and how many come only from that file) |
 | `hintdb stats --source PATH` | the rows from one source file or directory, most used first |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
-| `hintdb log ...` | read and edit the query log (used by `hint history` and `hint search`) |
+| `hintdb log ...` | read and edit the query log (used by `hint history` and `hint grep`) |
+| `hintdb remember [TOOL]` | the last question and the command that answers it (used by `hint remember`) |
+| `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND, and where it is marked |
+| `hintdb forget --save [--reason R] -- COMMAND` | mark COMMAND as wrong (used by `hint forget`) |
 | `hintdb query [-n N] WORDS...` | the search for the words alone, with scores (debugging) |
 
 Source kinds are detected from the file name. Use `--kind` to override, for

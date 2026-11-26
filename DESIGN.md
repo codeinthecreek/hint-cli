@@ -418,7 +418,7 @@ other words, so the limitation stays (README).
 ## Index
 
 - **Sources:** bash history, markdown and text notes, justfiles, Makefiles,
-  git and bash aliases. Man NAME lines (sections 1 and 8, from `apropos .`)
+  git and bash aliases, and the built-in answers file (see Remember). Man NAME lines (sections 1 and 8, from `apropos .`)
   go into a separate `man.db`. Direction agreed 2026-11-18: notes only when
   targeted (such as a Kubernetes cheatsheet), not folders of old notes from
   another platform; add recipe files, git aliases and bash aliases (done).
@@ -515,8 +515,8 @@ other words, so the limitation stays (README).
 ## Query log
 
 - **Purpose:** a record of real lookups, for looking up past answers
-  (`hint history`, `hint search`), per-source usage and, later, which
-  printed line was used.
+  (`hint history`), per-source usage, and the question that
+  `hint remember` answers (see Remember).
 - **Written by `hintdb find`** from the command line, after the answer is
   printed, one JSON line per lookup: `time` (local, ISO), `query`,
   `guesses` (as passed), `printed` (the lines exactly as shown) and `rows`
@@ -528,33 +528,40 @@ other words, so the limitation stays (README).
   `/dev/null` turns it off). Mode 0600. One `O_APPEND` write per lookup, so
   several terminals do not interleave. A failed write only warns. No
   rotation for now: one line per lookup stays small.
-- **Read by `hintdb log`**, one line per match, the last N (`--last`,
-  default 10), oldest first like `history | tail`; `--count` prints the
-  number of lines instead. Matching: every word, case-insensitive plain
-  substrings. Exit 1 when nothing matches, like grep. No model call.
-  - history (default): one line per lookup whose question matches:
-    number, time, question.
-  - `--printed` (search): grep over past commands. One line per printed
-    command line (not the `#` lines) whose text or note matches; the
-    status labels ("your history xN", "your notes", "your Makefile",
-    "your justfile", "model suggestion")
-    are not matched, or `search history` would match every row. A command
-    printed by several lookups shows once, with the newest lookup's number,
-    date and question and the count. Commands are never truncated.
+- **Read by `hintdb log`**, the last N matching lookups (`--last`,
+  default 10; `--all` for `hint grep`), oldest first like `history |
+  tail`; `--count` prints the
+  number of lookups instead. Matching: every word (a quoted phrase is its
+  words), case-insensitive plain substrings. Exit 1 when nothing matches,
+  like grep. No model call.
+  - A lookup matches when its question or a command it printed contains
+    the words. One line per lookup: number, time, question; then,
+    indented, each printed command that matched (its text or its status
+    comment; the labels "your history xN", "your notes", "your Makefile",
+    "your justfile", "model suggestion" are not matched, or `history
+    history` would match every row). A command printed twice by one lookup
+    is shown once; commands are never truncated.
+  - Merged 2026-11-26 from two forms: `hint history WORD` matched only the
+    question, and `hint search WORD` (`--printed`) grepped the printed
+    commands, one line per command with its newest lookup and a count of
+    lookups. "Search" was the wrong word next to hint itself, which is the
+    search, and the two forms plus `-H`/`-S` flags for several words were
+    more to learn than the task needs: recall starts with the command, and
+    finding a past lookup by anything in it covers both (the author:
+    "simple is best"). The per-command count was given up. The same day
+    the matching moved from `hint history WORD` to `hint grep WORD`, and
+    `history` went back to only listing (see "`hint` forms").
   - `--show N`: the full entry N, as printed then, with `# from <files>`
     (home as `~`) after each of the user's rows, from the log's `rows`:
     bad rows are better fixed in their source than hidden, and this is
-    how to find the source. `hint` accepts it after
-    `history` and `-H` only: it shows a history entry, and after `search`
-    it read as if it filtered the search.
+    how to find the source.
   - `--delete N[,N|N-M]...`: blanks the entries' lines, so other numbers do
     not change (deleting 41 then 42 deletes the 42 that was shown). Every
     single number must be an entry or nothing is deleted (a mistyped
     number deletes nothing); a range deletes the entries in it. The file
     is rewritten in place under an exclusive `flock`, and every append
     takes the same lock, so a lookup in another terminal waits instead of
-    being lost. No backup copy: it prints what it deleted. History only in
-    `hint`, like `--show`. Agreed 2026-11-20 for lookups that went to the
+    being lost. No backup copy: it prints what it deleted. Agreed 2026-11-20 for lookups that went to the
     model by mistake; bad index rows are better fixed in their source.
   An entry's number is its line in the file: stable while the log is only
   appended to; damaged and deleted lines are skipped but keep their
@@ -562,26 +569,359 @@ other words, so the limitation stays (README).
   2026-11-20: printing every answer in full made the list unusable within
   a day, so lists are one line per item and the full answer is asked for
   by number.
-- **`hint` forms.** `hint history [OPTIONS] [WORD|N]` (questions; a lone
-  positive number is the last N) and `hint search [OPTIONS] WORD` (printed
-  commands) are commands when at most one plain word follows, with the
-  options `-n/--last N`, `-c/--count` and, for history only,
-  `-s/--show NUM` or `-d/--delete NUMS` (alone) anywhere. `history` alone lists the last 10
-  lookups, like bash `history`; `search` alone prints the usage, since it
-  needs a word. Two or more plain words make the line a question, and an
-  unknown option with at most one plain word prints the usage. `help` is a command only
-  alone. Flags for several words: `-H/--history [WORD...]`,
-  `-S/--search WORD...`, same options. Agreed 2026-11-20: a reserved word
-  that swallowed questions would fail silently, giving the wrong kind of
-  answer, so the word forms are kept to one plain word (a real question
-  leads with words, "what does history -c do"); a miss there says how to
-  ask it as a question instead. A known option marks a command: `hint
-  history postgres --count` was first asked as a question, which the user
-  found confusing. `hint history` alone first printed the usage too; once
-  lists were one line per lookup, the user wanted it to list like bash
-  (2026-11-20). `hint help` is the way to the usage.
+- **`hint` forms** (split 2026-11-26). `hint history [N]` lists, like
+  bash `history`: the last 10 lookups, or the last N; `-s/--show NUM` and
+  `-d/--delete NUMS` (alone). It takes no word: `hint history ssh` says to
+  use `hint grep ssh`. `hint grep [-c] WORD` finds: every lookup whose
+  question or printed commands contain WORD (a quoted phrase: all its
+  words), with the matching commands; a number is a word (`hint grep
+  5432`); `-c` prints the number of lookups. Each is a command when at
+  most one plain word follows; two or more make the line a question, so
+  "history without duplicates" and "grep recursively for a word" are
+  asked as usual. An unknown option prints the usage; `hint search ...`
+  and `hint -H ...` are questions, like any other first word. `help` is a
+  command only alone.
+  Why: one command that both listed and searched (`history [OPTIONS]
+  [WORD|N]`, with `-n/--last N`) mixed two jobs. Its lone number meant
+  "the last N", so a number could not be searched for, and `-n N` next to
+  bash's own `history N` kept tripping the author up (`history -n 10` is
+  not "the last 10" in bash). Listing and finding are now separate, each
+  in its familiar form: `history N` as in bash, and `grep` as in `history
+  | grep` (the author prefers orthogonal commands). `search` was not
+  taken for the finding command: plain hint is the search. Before
+  2026-11-26 there were also `hint search WORD` (printed commands only)
+  and `-H`/`-S` flags for several words.
+  Agreed 2026-11-20: a reserved word that swallowed questions would fail
+  silently, giving the wrong kind of answer, so the word forms are kept
+  to one plain word (a real question leads with words, "what does
+  history -c do"); a miss there says how to ask it as a question instead.
+  `hint history` alone first printed the usage; once lists were one line
+  per lookup, the author wanted it to list like bash (2026-11-20). `hint
+  help` is the way to the usage.
 - **Private:** like shell history it holds the user's commands; it stays
   local and is never committed. Tests point it into their scratch directory.
+
+## Remember
+
+Agreed and built 2026-11-26. Named `hint answer` at first; renamed the
+same day to `hint remember`, which pairs with `hint forget` and says what
+it does (the author). The file and `HINTDB_ANSWERS` keep their name: they hold
+answers to questions.
+
+- **Purpose:** when a lookup missed and the user found the command some
+  other way, `hint remember` saves the question as a comment on that
+  command, so the next similar question finds it. A wrong tool guess was
+  behind most misses (26 of 30, 2026-11-18); with the question's words on
+  the user's row, the row is found even when the model guesses the same
+  wrong tool again. It works like a `# comment` the user writes in
+  history: the user's own words on the user's own command.
+- **Not a change to the guess.** The model's prompt and reply are
+  untouched, and there is no extra model call. Past (question, command)
+  pairs as worked examples in the prompt were considered and not taken:
+  worked examples were tried and rejected (see Lookup), and examples that
+  change with every lookup would be hard to measure. This is a match
+  change and is measured as one.
+- **Explicit, never automatic.** Learning from whatever was run after a
+  lookup was rejected: a mistyped flag would be remembered, and with
+  several terminals writing to one history file the lines after a lookup
+  may come from another terminal.
+- **Form:** `hint remember [TOOL]`. Same rule as `history` and `grep`: a
+  command when at most one plain word follows, a question with two or
+  more (`hint remember my ssh key passphrase` is a question).
+- **Usual sequence:** `hint QUESTION`, then the user tries commands until
+  one works, then `hint remember`. The user is not expected to do other work
+  in between, so the answer is taken to belong to the last lookup.
+- **The question:** the last lookup in the query log, as hint received it.
+  It is shown at the prompt, so a lookup made from another terminal in the
+  meantime is seen and cancelled.
+- **The history file read** is the one bash is writing now: `$HISTFILE` if
+  it is exported, else `~/.bash_history` (the rule `hintdb` uses to
+  register history on first use). It is never chosen from the registered
+  sources: other history files there (old ones, other machines') are for
+  reference, not the current session. A history file elsewhere needs
+  `export HISTFILE` in `.bashrc`. Reading it does not require it to be a
+  registered source.
+- **Not written yet:** a script cannot read the shell's history in memory,
+  only the file. If the file was last modified before the last lookup's
+  time, the commands run since are not in it; hint says so, suggests
+  `history -a; hint remember`, and exits 1 without a prompt. With `history
+  -a` in `PROMPT_COMMAND` (the README's setup) the file is always current.
+  Without it (servers), the documented form is `history -a; hint remember`,
+  not an alias: an alias line would itself be taken as the last command.
+  The check can miss: if another shell writes the file (e.g. on exit)
+  between the lookup and the answer, the file is newer but this session's
+  lines are not in it, and the prompt offers an older command, which the
+  user sees and cancels.
+- **Which line.** The file is read from the end. Timestamp lines
+  (`#1700000000`) are skipped. Each line is split into its commands as the
+  index does (`|`, `;`, `&&`, `||`; `sudo`, `env` and the like skipped; a
+  command's path dropped, so `/usr/sbin/ss` is `ss`), except that an
+  unquoted `;`, `|` or `&` also separates when it touches a word: the
+  index's tokens keep `-a;` whole, so `history -a;hint remember` was not
+  seen as running `hint` (found by the tests). The index is unchanged.
+  - **After the question** (changed 2026-11-26, from real use): only the
+    lines after the question's own `hint` line count. The question is the
+    last line whose words, split as the shell does (`shlex`), are `hint`
+    followed by the logged question (hint logs `"$*"`, so quotes and
+    spacing do not matter). `hint remember` takes the **last** of those lines
+    (what finally worked), `hint forget` the **first** (the suggestion run
+    right after asking). Nothing run since the question: says so, exit 1;
+    lines from before the question are never offered.
+    Why: the first version took the newest line anywhere, skipping
+    `history`/`fc` lines (so the `history -a` typed before `hint remember`
+    was not taken). In real use, after `hint show me the last history
+    items`, `history -n 10` (wrong), `man history`, `history --help`, plain
+    `hint forget` skipped every history line and offered `docker stop ...`
+    from before the question, and `hint forget history` offered `history
+    --help`. Matching the question's line was first rejected as fragile;
+    splitting it as the shell does makes it reliable.
+  - Always skipped: lines that run `hint` (the `hint remember` line itself,
+    in case `history -a` wrote it; not checked on a real terminal), and,
+    without TOOL, trivial lines by the index's rule (`cd /etc`, `man
+    history`). History and `fc` lines count: `history -n 10` and `fc -ln
+    -10` are lines one forgets or answers with, and the `history -a` before
+    `hint remember` is on the same line as hint or comes after the answer.
+    When only trivial lines follow the question, the message lists them,
+    each with the command that takes it (`history 10   hint remember
+    history`): in real use the answer was `history 10`, followed by `vim
+    ~/.bash_history`, and "no command since you asked" did not say why
+    (2026-11-26). The rule stays: without it `vim ~/.bash_history` would
+    have been offered.
+  - With TOOL: the last (answer) or first (forget) line after the question
+    in which any command is TOOL, with nothing else skipped: naming the
+    tool means that tool is wanted, so `hint remember history` finds
+    `history -d 1234` and `hint remember grep` finds `ps aux | grep nginx`.
+  - **Question not in the file** (asked in another terminal, or quotes
+    `shlex` cannot split): the newest line anywhere, skipping also lines
+    made only of `history` and `fc` commands, as in the first version. The
+    prompt says the question was not found and this is the newest command.
+- **Prompt:** the question, then the command on an editable line (`read -e
+  -i` from the terminal), so a typo or a one-off value can be fixed before
+  saving. Enter saves, Ctrl-C or an empty line cancels. A line under the
+  question says so, and how to reach another line: edit it, or (when no
+  TOOL was given) `hint remember TOOL` (the author, 2026-11-26). `hint forget`
+  says the same, with "Enter marks it WRONG". All three headers name the
+  question the same way, as typed, with its number in the query log (the
+  number `hint history` lists): `remember as the answer to "QUESTION"
+  (lookup N):`, `which command? the first after "QUESTION" (lookup N):`,
+  `which command? from "QUESTION" (lookup N):` (made consistent
+  2026-11-26: only remember showed the number, and only forget put `hint`
+  in front of the question).
+- **Saved:** the whole line as edited, not only the TOOL part, so it has
+  the shape of the user's existing row and merges with it. One line
+  `COMMAND  # QUESTION` appended to the answers file: `HINTDB_ANSWERS`,
+  default `~/.local/share/hintdb/answers` (`/dev/null` turns answers off).
+  Mode 0600, one `O_APPEND` write under `flock`, as for the query log.
+  Answers are per machine, like the index. To undo one, edit the file.
+- **In the index:** built in, like the query log, not registered in the
+  sources file: hint does not edit the user's sources, and a missing
+  answers file means no answers yet rather than a "source missing"
+  warning. `hintdb` includes the file whenever it exists, parsed as
+  history: its comment is searched as a history comment (weight 1.5), it
+  merges with the row of the same shape, and the row is labelled "your
+  history xN"; the answer adds 1 to the use count (a tie-breaker only;
+  accepted). `hintdb sources` lists it on a line of its own, marked as
+  built in; `hintdb stats` and `hint history --show` name it like any
+  source. It is part of the fingerprint, so the next lookup rebuilds. No
+  cleaning, shape or note rule changes, so no schema bump.
+- **Limits:** it helps only when a similar question is asked again; the
+  first miss is still a miss. A command typed over several lines is one
+  line in the history file with bash's defaults (`cmdhist` on: a loop is
+  joined with `;`, a `\` continuation is joined too; checked with bash
+  5.3). Only with `shopt -s lithist` is it written as several lines, so
+  the last line may be a fragment (`done`); the prompt shows it, to be
+  fixed there or cancelled. The index has the same limit.
+- **Tests** point `HINTDB_ANSWERS`, `HINTDB_LOG`, `HISTFILE` and the index
+  into the scratch directory, like the other checks.
+
+## Forget
+
+First built 2026-11-26 as read-only (it listed where the command is, for
+the user to delete or mark it); changed the same day to save a WRONG mark
+to hint's own file (agreed and built). Both are described below,
+since the second rests on what the first found.
+
+- **Purpose:** a wrong line that keeps coming up (`history -n 10`: `-n`
+  takes no count) feeds itself. It looks right, so it gets run, so it is
+  in history once more, with a higher use count and a more trusted
+  `xN`. Bash history has the same loop for up-arrow and Ctrl-R. The typo
+  rule cannot catch it: the command is installed, and wrong flags cannot
+  be told without per-tool flag tables. `hint forget` marks the command
+  WRONG (see "WRONG marker"), so hint stops showing it.
+- **Saves the mark to hint's own file, never edits a source.** `hint
+  forget` appends one line, `COMMAND  # WRONG!` or `COMMAND  # WRONG:
+  REASON`, to the wrong file: `HINTDB_WRONG`, default
+  `~/.local/share/hintdb/wrong` (`/dev/null` turns it off). Mode 0600, one
+  `O_APPEND` write under `flock`, as for the answers file. It is built in
+  like the answers file (included whenever it exists, read as history,
+  listed by `hintdb sources`), so the existing marker rule applies with no
+  new rule: the command is dropped from every source, and a model guess of
+  it is labelled. Undo: delete its line.
+  - **Why a file of its own**, not the answers file: each file holds what
+    one command saved (`cat` shows what was marked), no "answers" file
+    holding marks, and no remembered and marked copy of one command in
+    the same file.
+  - **How it got here:** first read-only, because the author chose safety
+    over convenience; considered then and not taken: a stored forget
+    list (a line wrong for one question may be right for another, and a
+    mistaken forget would hide it with no sign), and printing a `sed -i`
+    command to remove the line from history (it worked when tested, but a
+    generated pattern must escape every special character). The
+    read-only version listed the lines and printed the steps for editing
+    bash history safely; real use then showed that deleting the first of
+    several listed lines shifted the others, and the WRONG marker made
+    marking possible. With the marker, the stored list's objection no
+    longer holds: a mark says the command is wrong in itself, is listed
+    by `hintdb stats`, labels a model guess of it, and is undone by
+    deleting a line. Saving it to hint's own file needs no editing of
+    bash history at all (the author, 2026-11-26: "save the mark to hint's own
+    file").
+- **Form:** `hint forget [TOOL]`, parsed like `hint remember`: a command
+  when at most one plain word follows, a question with two or more.
+- **Picking the line:** as for `hint remember` (see "Which line"), but the
+  **first** line after the last question, or the first TOOL line: the
+  suggestion that looked right and was run right after asking. Also the
+  check that the history file was written since the last lookup, when
+  there is one. A question is not required: with none in the log, or none
+  found in the file, the newest line is offered. The prompt says where it
+  started: `which command? the first after "QUESTION" (lookup N):`. The line is
+  editable, so `hint forget history` plus an edit reaches a line that was
+  not run this time. Enter goes on; an empty line or Ctrl-C cancels.
+- **From the last lookup's output** (added 2026-11-26; user: "I see
+  something is wrong and mark it without adding it to my history"): when
+  nothing was run after the question (no line, or only trivial ones), or
+  the history file was not written since it (a server without `history
+  -a`), `hint forget` lists the commands the last lookup printed,
+  numbered, from the query log, and asks for a number; the chosen command
+  then goes to the editable line as usual. Listed: the user's rows and the
+  model's guesses (also "not installed" ones), in printed order, once
+  each; not status lines, not rows shown as templates (`user@<HOST>`: a
+  mark needs one exact command), not commands already marked. A number
+  not in the list, or an empty answer, saves nothing. With a TOOL the
+  list is not offered: a TOOL names a line in the history. A `hint forget
+  N` form (the Nth printed command, without the list) was considered and
+  not taken: the author found it confusing next to `hint forget TOOL`.
+- **Reason:** a second prompt, `reason (optional, Enter for none):`. Enter
+  saves `# WRONG!`; a reason saves `# WRONG: REASON`. Ctrl-C cancels, and
+  nothing is saved.
+- **Already marked:** if the command is marked in any history-kind file
+  (the wrong file, bash history, another history, the answers file), hint
+  says where (`history -n 10 is already marked WRONG: ~/.bash_history line
+  43870`) and saves nothing.
+- **Exact line only.** The index merges lines of the same shape into one
+  row, and hint may show the row as a template (`ssh ... user@<HOST>`).
+  `hint forget` marks one exact command (runs of spaces as one); other
+  commands of the same shape stay.
+- **Output after saving, short:**
+
+      saved: history -n 10  # WRONG: -n takes no count
+      hint now hides it. It is still in your history (up-arrow, Ctrl-R):
+        ~/.bash_history  lines 2, 4
+      Delete those lines to clean it up there too; see the README for
+      editing history safely.
+
+  One file per line, as in the `--where` listing: wrapped as running
+  text, a long path broke the sentence (seen in testing, 2026-11-26).
+
+  The "still in" lines list the copies in the live history and in the
+  registered sources, found as the read-only version did: in history-kind
+  files a line whose command (comment dropped, runs of spaces as one)
+  equals the chosen one; in other files a line containing it (notes put
+  commands in code blocks or after `$ `). The live history comes first,
+  registered or not. With no copies anywhere, only the first two lines
+  are printed. The full steps for editing bash history moved to the
+  README: printed after every mark they were long for something optional.
+- **Editing bash history safely** (now in the README; tested 2026-11-26,
+  two interactive bash 5.3 shells under pseudo-terminals sharing one file,
+  `histappend`, `PROMPT_COMMAND="history -a"`):
+  1. `history -a` first, or the session's unwritten lines are lost by the
+     reload;
+  2. edit the file and save it soon: an editor open on the file overwrites
+     lines other terminals append meanwhile (vim warns, other editors may
+     not);
+  3. in this terminal and every other open one, ` history -a; history -c;
+     history -r` (leading space: not saved, with `ignorespace`). A shell
+     keeps a removed line in memory until reloaded, but with `histappend`
+     does not write it back. Bash counts the lines of the file it has
+     read: after k lines were deleted, `history -n` in another terminal
+     skipped the next k new lines (they stay in the file but never reach
+     that terminal), while `history -c; history -r` loaded every line and
+     none of the deleted ones. Delete from the last listed line up, so the
+     other line numbers stay right.
+  The steps name plain bash commands, not aliases a user may have.
+- **Afterwards:** the wrong file has changed, so the next lookup rebuilds
+  the index without the command. `hintdb forget --where` stays for the
+  listing (debugging, and the "still in" line).
+- **Limits:** a Makefile recipe joined from `\` lines is not found in the
+  listing (the file holds it in pieces). Matching other files by
+  substring can list a longer line that contains the command.
+- **Tests** use fixture sources, a scratch history file, and
+  `HINTDB_WRONG` in the scratch directory.
+
+## WRONG marker
+
+Agreed and built 2026-11-26.
+
+- **Purpose:** a command that is wrong in itself (`history -n 10`: `-n`
+  takes no count) is marked where it is, and hint stops showing it for
+  every question. A command that is right but not for this question is a
+  different case: `hint remember` puts the question's words on the right
+  command instead, and nothing is hidden (the author, 2026-11-26).
+- **The mark:** a trailing comment on a line in a history-kind file (bash
+  history, other history files, the answers file, and the wrong file that
+  `hint forget` writes) whose text starts with
+  `WRONG` as a whole word, in capitals: followed by the end of the
+  comment, punctuation or a space. So `history -n 10  # WRONG!`, `# WRONG`
+  and `# WRONG: -n takes no count` mark the command, with room for a
+  reason; `# fix wrong permissions` and `# Wrong!` do not. `# WRONG
+  permissions fixed` does: capitals at the start of a comment are the
+  signal, not the words after.
+- **Not taken:**
+  - free words such as "wrong", "broken", "doesn't work" anywhere in a
+    comment: `chmod -R u+w dir  # fix wrong permissions` uses the word
+    for the problem, not the command;
+  - a comment line typed at the prompt (`# WRONG: history -n 10`; tested:
+    bash saves it and runs nothing, not even `$(...)` or redirections in
+    it): the author found it unnatural, and marks are added while editing
+    the history file anyway, from `hint forget`'s line numbers;
+  - marks in notes files: notes are the user's own files, and deleting
+    the line there is simple;
+  - pushing a marked command down instead of dropping it: a command wrong
+    in itself has no good place in the list.
+- **Effect** (a cleaning rule, so `SCHEMA_VERSION` is bumped): the build
+  first collects the marked commands (the command part of each marked
+  line, runs of spaces as one), then skips every line, from every source
+  and of every kind, whose command is marked. Exact command only: other
+  commands of the same shape stay (`history -n` when `history -n 10` is
+  marked). Copies run later are dropped too, which breaks the loop of a
+  wrong line coming back every time it is run.
+- **Why mark rather than delete:** the mark stays next to the command,
+  with its reason (Ctrl-R shows it); running it again does not bring it
+  back; one marked copy is enough; and the line numbers `hint forget`
+  printed stay right. Deleting a line shifts every later line up: the
+  user deleted the first of several listed lines and the others were then
+  wrong (2026-11-26).
+- **A trace:** `hintdb stats` lists the marked commands, each with the
+  file and line of its mark and the reason. Undo: remove the comment.
+- **When the model suggests a marked command** (added 2026-11-26, from
+  real use: the mark removed the user's row, and the model then printed
+  `history -n 10` second, as a plain suggestion): the guess is printed
+  after the other guesses, never first or second, labelled with the mark's
+  comment first, so it reads as a verdict and a reason shows: `# WRONG!
+  (model suggestion, marked by you)`, `# WRONG: -n takes no count (model
+  suggestion, marked by you)`. Its tool, flags and words still guide the search: the tool is
+  usually right, only the command is wrong. When no installed command was
+  found, the model's list says `(WRONG!, marked by you)` after it.
+  `--debug` names marked guesses. The marks are kept in the index's meta.
+- **In `hint forget`:** it saves the mark to hint's own wrong file (see
+  Forget). When the command is already marked anywhere, it says where, so
+  the mark can be found to undo it, and saves nothing. (The read-only
+  version suggested adding `# WRONG!` to a history line by hand, or
+  deleting the lines from the last one up.) A mark added by hand to a
+  history line works the same as one saved by `hint forget`.
+- **Tests:** marks in fixture history lines (`# WRONG`, `# WRONG!`,
+  `# WRONG: reason`, and the near misses above), a copy of the command in
+  a notes file and another history file, `hintdb stats`, `hint forget`.
 
 ## Known limitations
 

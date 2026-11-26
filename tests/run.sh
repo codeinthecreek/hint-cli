@@ -23,7 +23,7 @@ mkdir -p "$tmp/bin"
 ln -s "$root/hint" "$tmp/bin/hint"
 ln -s "$root/hintdb" "$tmp/bin/hintdb"
 # Stub tools the fixtures use, so they count as installed here.
-for t in fakedock fakedock-compose FakeVM xrandr; do
+for t in fakedock fakedock-compose FakeVM xrandr fakess; do
   printf '#!/bin/sh\n' > "$tmp/bin/$t"; chmod +x "$tmp/bin/$t"
 done
 export PATH="$tmp/bin:$PATH"
@@ -31,7 +31,7 @@ export PATH="$tmp/bin:$PATH"
 # Isolated index and sources.
 export HINTDB_DB="$tmp/hint.db" HINTDB_MANDB="$tmp/man.db"
 export HINTDB_SOURCES="$tmp/sources" HISTFILE="$fix/history"
-export HINTDB_LOG="$tmp/queries.jsonl"
+export HINTDB_LOG="$tmp/queries.jsonl" HINTDB_ANSWERS="$tmp/answers" HINTDB_WRONG="$tmp/wrong"
 export HINTDB_APROPOS="cat $fix/apropos.txt"
 unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL
 
@@ -563,71 +563,79 @@ status "Ollama error: exit 1" 1 $?
 has "Ollama error: shows Ollama's message" "$out" \
   "returned an error (model nosuch): model \"nosuch\" not found, try pulling it first"
 
-echo "== hint history / search (query log)"
+echo "== hint history and hint grep (query log)"
 flog="$fix/queries.jsonl"   # 12 synthetic entries on lines 1-3, 5-13; line 4 is damaged
 H() { HINTDB_LOG="$flog" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }   # no model reachable
 
-out=$(H search 2>&1)
-status "search alone: usage, exit 2" 2 $?
-has "search alone: usage lists the options" "$out" "-n, --last N"
+# history: lists, like bash history.
 out=$(H history 2>&1)
 status "history alone: exit 0" 0 $?
 has "history alone: the last 10 lookups, like bash history" "$(wc -l <<<"$out")" "10"
 line "history alone: newest last" "$out" 10 "   13  2026-11-12 09:00  remove old host key"
-if [ "$out" = "$(H --history 2>&1)" ]; then ok "history alone: same as --history"
-else bad "history alone: same as --history" "$out"; fi
-out=$(H help 2>&1)
-has "usage: history and search forms" "$out" "hint history [OPTIONS] [WORD|N]"
-has "usage: --show" "$out" "hint history --show NUM"
-has "usage: says where options may go" "$out" "OPTIONS, anywhere after history, search, -H or -S:"
-has "usage: says a second word makes a question" "$out" \
-  "With a second WORD, the line is a question for the model instead:"
-
-# history: one line per lookup, numbered by its line in the log.
-out=$(H history registry 2>&1)
-status "history WORD: exit 0 without a model" 0 $?
-line "history WORD: number, time, question" "$out" 1 "    1  2026-11-01 09:00  start the local registry"
-has "history WORD: one line per lookup" "$(wc -l <<<"$out")" "1"
-out=$(H history ssh 2>&1)
-has "history: case-insensitive" "$out" "    2  2026-11-02 09:00  SSH tunnel to postgres"
-has "history: numbers skip the damaged line" "$out" "   12  2026-11-11 09:00  ssh with a key"
-has "history: matches inside words (substring)" "$(H history frob 2>&1)" "zzqq frobnicate"
-out=$(H history keygen 2>&1)
-status "history: matches the question, not the printed lines (exit 1)" 1 $?
-has "history WORD: no match says how to ask instead" "$out" \
-  'hint: no past questions contain "keygen"; to ask it as a question, add a word'
-
+lacks "history alone: damaged log line skipped" "$out" "not json"
 out=$(H history 2 2>&1)
 status "history N: exit 0" 0 $?
 has "history N: last N lookups" "$(wc -l <<<"$out")" "2"
 line "history N: oldest first, newest last" "$out" 2 "   13  2026-11-12 09:00  remove old host key"
+has "history N: more than there are" "$(H history 50 2>&1 | wc -l)" "12"
+out=$(H history ssh 2>&1)
+status "history WORD: not a search, exit 2" 2 $?
+has "history WORD: points to grep" "$out" 'hint: history takes a number; to find past lookups with "ssh":  hint grep ssh'
+for a in "-n 3" "-c" "--last 3" "--bogus"; do
+  H history $a >/dev/null 2>&1
+  status "history with an option it does not take ($a): exit 2" 2 $?
+done
+out=$(HINTDB_LOG="$tmp/none.jsonl" hint history 2>&1)
+status "history, no log yet: exit 1" 1 $?
+has "history, no log yet: says so" "$out" "hint: no past lookups yet"
+out=$(H help 2>&1)
+has "usage: history" "$out" "hint history [N]"
+has "usage: --show" "$out" "hint history --show NUM"
+has "usage: --delete" "$out" "hint history --delete NUM[,NUM|NUM-NUM]..."
+has "usage: grep" "$out" "hint grep [-c] WORD"
+has "usage: how to give several words" "$out" 'For several words, quote them:  hint grep "ssh key"'
+has "usage: says a second unquoted word makes a question" "$out" \
+  "Unquoted, a second word makes the line a question for the model instead:"
+lacks "usage: no search form" "$out" "hint search"
+lacks "usage: no -n option" "$out" "--last"
 
-# search: grep over past commands.
-out=$(H search keygen 2>&1)
-status "search WORD: exit 0" 0 $?
-line "search WORD: command, then number, date and question" "$out" 1 \
-  "ssh-keygen -R oldhost.example.org  # 13  2026-11-12 remove old host key"
-out=$(H search ssh 2>&1)
-has "search: only command lines" "$(grep -c '^  ' <<<"$out")" "0"
-has "search: one line per command" "$(wc -l <<<"$out")" "3"
-has "search: matches a command's note" "$(H search registry-up 2>&1)" \
-  "docker run -d -p 5000:5000 registry:3  # 1  2026-11-01 start the local registry"
-lacks "search: not the question" "$(H search frobnicate 2>&1)" "zzqq"
-out=$(H search history 2>&1)
-status "search: status labels (your history, your notes) do not match" 1 $?
-has "search: a number is a word" "$(H search 5432 2>&1)" "ssh -N -L 5432:localhost:5432 db.example.org"
-has "search WORD: no match message" "$(H search zzzz 2>&1)" \
-  'hint: no past commands contain "zzzz"; to ask it as a question, add a word'
+# grep: the lookups whose question or printed commands contain the word.
+out=$(H grep registry 2>&1)
+status "grep WORD: exit 0 without a model" 0 $?
+line "grep WORD: number, time, question" "$out" 1 "    1  2026-11-01 09:00  start the local registry"
+out=$(H grep ssh 2>&1)
+has "grep: case-insensitive" "$out" "    2  2026-11-02 09:00  SSH tunnel to postgres"
+has "grep: numbers skip the damaged line" "$out" "   12  2026-11-11 09:00  ssh with a key"
+has "grep: a lookup found by a command it printed" "$out" "   13  2026-11-12 09:00  remove old host key"
+has "grep: the matching command shown under its lookup" "$out" \
+  "$(printf '%s\n' '   13  2026-11-12 09:00  remove old host key' '         ssh-keygen -R oldhost.example.org')"
+has "grep: three lookups, each with its matching command" "$(grep -c '^ \{9\}ssh' <<<"$out")" "3"
+has "grep: matches inside words (substring)" "$(H grep frob 2>&1)" "zzqq frobnicate"
+out=$(H grep keygen 2>&1)
+status "grep: a word only in a printed command finds the lookup (exit 0)" 0 $?
+line "grep: question line, then the command" "$out" 2 "         ssh-keygen -R oldhost.example.org"
+has "grep: a number is a word" "$(H grep 5432 2>&1)" "         ssh -N -L 5432:localhost:5432 db.example.org"
+has "grep: matches a command's note" "$(H grep registry-up 2>&1)" "         docker run -d -p 5000:5000 registry:3"
+lacks "grep: a match in the question only shows no command" "$(H grep frobnicate 2>&1)" "         "
+out=$(H grep history 2>&1)
+status "grep: status labels (your history, your notes) do not match" 1 $?
+out=$(H grep zzzz 2>&1)
+status "grep: no match: exit 1" 1 $?
+has "grep: no match says how to ask instead" "$out" \
+  'hint: no past lookups contain "zzzz"; to ask it as a question, add a word'
+has "grep: every match, not only the last 10" \
+  "$(H grep 2026 2>&1 | grep -c '^ *[0-9]')" "0"
+has "grep: all lookups when all match" "$(H grep e 2>&1 | grep -c '^ \{3,4\}[0-9]')" "12"
 dlog="$tmp/dup.jsonl"
 printf '%s\n' \
   '{"time": "2026-11-01T09:00:00", "query": "list containers", "printed": ["docker ps -a", "  # your history x9"]}' \
   '{"time": "2026-11-02T09:00:00", "query": "a long command", "printed": ["rsync -e \"ssh -i ~/.ssh/id_ed25519.lab -o IdentitiesOnly=yes\" --archive --delete u@build2.example.org:/srv/data/ /home/user/backup/build2/", "  # your history x2"]}' \
   '{"time": "2026-11-03T09:00:00", "query": "show all containers", "printed": ["docker ps -a", "  # model suggestion", "docker ps -a", "  # model suggestion"]}' > "$dlog"
-out=$(HINTDB_LOG="$dlog" hint search docker 2>&1)
-line "search: a command from several lookups shown once, newest, with a count" "$out" 1 \
-  "docker ps -a  # 3  2026-11-03 show all containers (x2)"
-has "search: long commands not truncated" "$(HINTDB_LOG="$dlog" hint search rsync 2>&1)" \
-  "/home/user/backup/build2/  # 2  2026-11-02 a long command"
+out=$(HINTDB_LOG="$dlog" hint grep docker 2>&1)
+has "grep: a command is shown under each lookup that printed it" "$(grep -c 'docker ps -a' <<<"$out")" "2"
+line "grep: printed twice in one lookup, shown once" "$out" 4 "         docker ps -a"
+has "grep: long commands not truncated" "$(HINTDB_LOG="$dlog" hint grep rsync 2>&1)" \
+  "/home/user/backup/build2/"
 
 # --show: one full entry.
 out=$(H history --show 2 2>&1)
@@ -637,18 +645,12 @@ line "--show NUM: printed lines indented" "$out" 2 "  ssh -N -L 5432:localhost:5
 line "--show NUM: status lines as shown" "$out" 3 "    # your history x1: tunnel to postgres"
 has "-s NUM" "$(H history -s 1 2>&1)" "  docker run -d -p 5000:5000 registry:3"
 has "--show=NUM" "$(H history --show=1 2>&1)" "start the local registry"
-H search --show 1 >/dev/null 2>&1
-status "search --show: usage (history only)" 2 $?
-H -S --show 1 >/dev/null 2>&1
-status "-S --show: usage (history only)" 2 $?
-has "usage: --show is for history only" "$(H help 2>&1)" "After history or -H only"
-has "-H -s NUM" "$(H -H -s 1 2>&1)" "start the local registry"
 has "--show: nothing found shown" "$(H history --show 3 2>&1)" "  (nothing found)"
 out=$(H history --show 4 2>&1)
 status "--show on a damaged line: exit 1" 1 $?
 has "--show: no such entry" "$out" "hintdb: no entry 4 in the query log"
 has "--show: past the end" "$(H history --show 99 2>&1)" "hintdb: no entry 99 in the query log"
-for a in "ssh --show 2" "--show 2 -c" "--show 2 -n 3" "5 --show 2" "--show" "--show x"; do
+for a in "ssh --show 2" "--show 2 -c" "5 --show 2" "--show" "--show x"; do
   H history $a >/dev/null 2>&1
   status "--show with other things or no number ($a): exit 2" 2 $?
 done
@@ -675,11 +677,11 @@ D() { HINTDB_LOG="$tmp/del.jsonl" OLLAMA_HOST=127.0.0.1:1 hint "$@"; }
 out=$(D history -d 2 2>&1)
 status "--delete NUM: exit 0" 0 $?
 line "--delete NUM: says what was deleted" "$out" 1 "deleted     2  2026-11-02 09:00  SSH tunnel to postgres"
-lacks "--delete NUM: gone from history" "$(D history -n 20 2>&1)" "SSH tunnel to postgres"
-has "--delete: other entries keep their numbers" "$(D history -n 20 2>&1)" "   12  2026-11-11 09:00  ssh with a key"
+lacks "--delete NUM: gone from history" "$(D history 20 2>&1)" "SSH tunnel to postgres"
+has "--delete: other entries keep their numbers" "$(D history 20 2>&1)" "   12  2026-11-11 09:00  ssh with a key"
 has "--delete: the file keeps its line count" "$(wc -l <"$tmp/del.jsonl")" "13"
 has "--delete: --show of a deleted entry" "$(D history --show 2 2>&1)" "hintdb: no entry 2 in the query log"
-lacks "--delete: gone from search too" "$(D search 5432 2>&1)" "db.example.org"
+lacks "--delete: its commands are gone too" "$(D grep postgres 2>&1)" "db.example.org"
 out=$(D history -d 2 2>&1)
 status "--delete of a deleted entry: exit 1" 1 $?
 has "--delete of a deleted entry: message" "$out" "hintdb: no entry 2 in the query log; nothing deleted"
@@ -691,20 +693,19 @@ if cmp -s "$tmp/del.jsonl" "$tmp/del.before"; then ok "--delete with one missing
 else bad "--delete with one missing NUM: nothing deleted"; fi
 out=$(D history --delete=1,5-7 2>&1)
 has "--delete list and range: all deleted" "$(grep -c '^deleted' <<<"$out")" "4"
-out=$(D -H --delete 3-5 2>&1)
+out=$(D history --delete 3-5 2>&1)
 has "--delete range: only the entries in it (4 damaged, 5 gone)" "$out" "deleted     3"
 has "--delete range: one entry deleted" "$(grep -c '^deleted' <<<"$out")" "1"
-has "--delete: the rest" "$(D history -n 20 2>&1 | wc -l)" "6"
-for a in "history ssh -d 8" "history -d 8 -c" "history -d 8 -n 2" "history -d 8 -s 8" \
-         "history -d" "history -d x" "history -d 8,,9" "search -d 8" "-S -d 8"; do
+has "--delete: the rest" "$(D history 20 2>&1 | wc -l)" "6"
+for a in "history ssh -d 8" "history 2 -d 8" "history -d 8 -c" "history -d 8 -s 8" \
+         "history -d" "history -d x" "history -d 8,,9"; do
   D $a >/dev/null 2>&1
-  status "--delete with other things, no or bad NUM, or after search ($a): exit 2" 2 $?
+  status "--delete with other things, or no or bad NUM ($a): exit 2" 2 $?
 done
-has "--delete with nothing changed by the refused calls" "$(D history -n 20 2>&1 | wc -l)" "6"
-has "usage: --delete" "$(H help 2>&1)" "-d, --delete NUM[,NUM|NUM-NUM]..."
+has "--delete with nothing changed by the refused calls" "$(D history 20 2>&1 | wc -l)" "6"
 HINTDB_LOG="$tmp/del.jsonl" hintdb find -q "disk usage of directory contents" "du -sh /tmp/x" >/dev/null 2>&1
 has "a lookup after a delete is appended as the next line" \
-  "$(D history -n 1 2>&1)" "   14  "
+  "$(D history 1 2>&1)" "   14  "
 if command -v flock >/dev/null; then
   flock "$tmp/del.jsonl" sleep 1 &
   lock_pid=$!
@@ -715,57 +716,25 @@ if command -v flock >/dev/null; then
   wait "$lock_pid"
   if [ $(( (t1 - t0) / 1000000 )) -ge 500 ]; then ok "a lookup waits for the log lock instead of writing during a delete"
   else bad "a lookup waits for the log lock instead of writing during a delete" "waited $(( (t1 - t0) / 1000000 )) ms"; fi
-  has "the lookup that waited is in the log" "$(D history -n 1 2>&1)" "   15  "
+  has "the lookup that waited is in the log" "$(D history 1 2>&1)" "   15  "
 fi
 
-# Flag forms.
-out=$(H -H 2>&1)
-has "-H alone: the last 10 lookups" "$(wc -l <<<"$out")" "10"
-lacks "-H: damaged log line skipped" "$out" "not json"
-out=$(H --history ssh key 2>&1)
-has "--history WORDS: all words must match" "$(wc -l <<<"$out")" "1"
-has "--history WORDS: the matching lookup" "$out" "ssh with a key"
-has "-H -n N" "$(H -H -n 3 2>&1 | wc -l)" "3"
-has "-H --last N" "$(H -H --last 3 2>&1 | wc -l)" "3"
-has "-H --last=N" "$(H -H --last=1 key 2>&1)" "remove old host key"
-has "-H with a number searches for it, not a count" "$(H -H 5000 2>&1)" \
-  'hint: no past questions contain "5000"'
-out=$(H -H --last 0 2>&1)
-status "--last 0: exit 2" 2 $?
-has "--last 0: message" "$out" "hint: --last needs a number of 1 or more"
-out=$(H -H --bogus 2>&1)
-status "unknown option: usage, exit 2" 2 $?
-has "flag form: no-match message without the question hint" "$(H -H zzzz 2>&1)" \
-  'hint: no past questions contain "zzzz"'
-lacks "flag form: no 'add a word'" "$(H -H zzzz 2>&1)" "add a word"
-out=$(H -S 2>&1)
-status "-S without words: usage" 2 $?
-has "--search WORDS" "$(H --search docker 2>&1 | wc -l)" "2"
-has "-S --count: number of matching commands" "$(H -S -c ssh 2>&1)" "3"
-out=$(H -H --count zzzz 2>&1)
-status "--count with no match: exit 1" 1 $?
-line "--count with no match: prints 0 only" "$out" 1 "0"
-has "--count: ignores --last" "$(H -H -c -n 2 2>&1)" "12"
-out=$(HINTDB_LOG="$tmp/none.jsonl" hint history 3 2>&1)
-has "no log yet: says so" "$out" "hint: no past questions yet"
-
-# One plain word at most, options anywhere: still a log lookup.
-has "history WORD --count" "$(H history ssh --count 2>&1)" "2"
-has "history --count WORD" "$(H history --count ssh 2>&1)" "2"
-out=$(H history ssh -n 1 2>&1)
-has "history WORD -n N: one lookup" "$(wc -l <<<"$out")" "1"
-has "history WORD -n N: the last match" "$out" "ssh with a key"
-has "history --count alone: all lookups" "$(H history --count 2>&1)" "12"
-has "history --last N alone" "$(H history --last 2 2>&1 | wc -l)" "2"
-has "search WORD -c" "$(H search docker -c 2>&1)" "2"
-has "history N --count: the number is ignored" "$(H history 20 --count 2>&1)" "12"
-out=$(H history ssh -x 2>&1)
-status "history with an unknown option: usage, exit 2" 2 $?
-has "history with an unknown option: usage shown" "$out" "OPTIONS, anywhere after"
-out=$(H history -n 2>&1)
-status "history -n without a number: usage" 2 $?
-out=$(H search -c 2>&1)
-status "search with an option but no word: usage" 2 $?
+# grep: several words quoted, one argument; all of them must match.
+out=$(H grep "ssh key" 2>&1)
+status "grep \"two words\": exit 0" 0 $?
+has "grep \"two words\": all words, anywhere in the question" "$out" "ssh with a key"
+has "grep \"two words\": or in a command" "$out" "         ssh -i ~/.ssh/key user@build2.example.org"
+lacks "grep \"two words\": not a lookup with only one of them" "$out" "SSH tunnel to postgres"
+has "grep -c: counts lookups" "$(H grep -c ssh 2>&1)" "3"
+has "grep WORD -c: option after the word" "$(H grep ssh --count 2>&1)" "3"
+out=$(H grep --count zzzz 2>&1)
+status "grep -c with no match: exit 1" 1 $?
+line "grep -c with no match: prints 0 only" "$out" 1 "0"
+for a in "" "-c" "--bogus ssh"; do
+  H grep $a >/dev/null 2>&1
+  status "grep without a word, or with an unknown option ($a): usage, exit 2" 2 $?
+done
+has "grep with an unknown option: usage shown" "$(H grep ssh -x 2>&1)" "usage: hint"
 
 printf '%s\n' 'fc -ln -10' > "$reply"
 hint history postgres docker >/dev/null 2>&1
@@ -774,19 +743,354 @@ has "history + two plain words is a question" "$(jq -r '.messages[-1].content' <
 hint history without the -a flag >/dev/null 2>&1
 has "history + words + an unknown dash word is a question, not usage" \
   "$(jq -r '.messages[-1].content' <"$tmp/request")" "history without the -a flag"
-hint search docker images --count >/dev/null 2>&1
-has "search + two plain words and an option is a question" \
-  "$(jq -r '.messages[-1].content' <"$tmp/request")" "search docker images --count"
 out=$(hint history without duplicates 2>&1)
 has "history + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
   "history without duplicates"
 lacks "history + more words: no usage" "$out" "usage: hint"
-out=$(hint search for files containing foo 2>&1)
-has "search + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
-  "search for files containing foo"
+hint grep recursively for a word >/dev/null 2>&1
+has "grep + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "grep recursively for a word"
+hint search docker >/dev/null 2>&1
+has "search is not a command: a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "search docker"
+hint -H ssh >/dev/null 2>&1
+has "-H is not an option: a question, like any first word" \
+  "$(jq -r '.messages[-1].content' <"$tmp/request")" "-H ssh"
 : > "$HINTDB_LOG"
 hint short dns lookup >/dev/null 2>&1
-has "a lookup can be found again with history" "$(hint history dns 2>&1)" "short dns lookup"
+has "a lookup can be found again with grep" "$(hint grep dns 2>&1)" "short dns lookup"
+
+echo "== hint remember"
+# Its own history file and log, so the mtime check and the lines are known.
+ah="$tmp/answer-history" alog="$tmp/answer-log.jsonl" ans="$tmp/answers"
+printf '%s\n' 'du -sh /srv/current' 'sudo /usr/sbin/fakess -ltnp sport = 8080' \
+  "sudo /usr/sbin/fakess -ltnp 'sport = :8080'  # my own note" 'ps aux | grep nginx' \
+  'cd /etc' '#1700000000' 'history -a' 'history -d 12' 'history -a; hint remember' > "$ah"
+printf '%s\n' '{"time": "2026-11-01T09:00:00", "query": "older question", "printed": []}' \
+  '{"time": "2026-11-02T09:00:00", "query": "who is listening on port 8080", "printed": []}' > "$alog"
+A() { HISTFILE="$ah" HINTDB_LOG="$alog" "$@"; }
+
+out=$(A hintdb remember 2>&1)
+line "remember: the last question, with its number; not in history: newest" "$out" 1 \
+  "$(printf '2\twho is listening on port 8080\tnewest')"
+line "remember: last command, skipping hint, history housekeeping and trivial lines" "$out" 2 \
+  "ps aux | grep nginx"
+out=$(A hintdb remember fakess 2>&1)
+line "remember TOOL: newest line with that tool (sudo and path skipped), comment dropped" "$out" 2 \
+  "sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
+line "remember TOOL: any command in a pipeline counts" "$(A hintdb remember grep 2>&1)" 2 "ps aux | grep nginx"
+line "remember history: history lines found when named, the hint line still skipped" \
+  "$(A hintdb remember history 2>&1)" 2 "history -d 12"
+line "remember: a ; with no space still splits the line" \
+  "$(printf '%s\n' 'du -sh /srv/current' 'history -a;hint remember' > "$tmp/h2"; HISTFILE="$tmp/h2" HINTDB_LOG="$alog" hintdb remember 2>&1)" 2 \
+  "du -sh /srv/current"
+line "remember: a quoted ; is not a separator" \
+  "$(printf '%s\n' "fakess -x 'a;hint'" > "$tmp/h3"; HISTFILE="$tmp/h3" HINTDB_LOG="$alog" hintdb remember 2>&1)" 2 \
+  "fakess -x 'a;hint'"
+line "remember cd: trivial lines found when named" "$(A hintdb remember cd 2>&1)" 2 "cd /etc"
+out=$(A hintdb remember zzqq 2>&1)
+status "remember TOOL not in history: exit 1" 1 $?
+has "remember TOOL not in history: says so" "$out" "no zzqq command found in"
+
+out=$(HISTFILE="$tmp/no-such-history" HINTDB_LOG="$alog" hintdb remember 2>&1)
+status "remember: missing history file: exit 1" 1 $?
+has "remember: missing history file: says to export HISTFILE" "$out" "export HISTFILE"
+out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/no-such-log" hintdb remember 2>&1)
+status "remember: no question yet: exit 1" 1 $?
+has "remember: no question yet: says so" "$out" "no question to answer yet"
+printf '%s\n' '{"time": "2099-01-01T09:00:00", "query": "asked after the last write", "printed": []}' > "$tmp/future-log"
+out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/future-log" hint remember fakess 2>&1 </dev/null)
+status "remember: history not written since the question: exit 1" 1 $?
+has "remember: history not written since the question: says what to run" "$out" \
+  "run:  history -a; hint remember fakess"
+lacks "remember: history not written: no prompt" "$out" "answer to"
+out=$(HINTDB_ANSWERS=/dev/null A hintdb remember 2>&1)
+status "remember: HINTDB_ANSWERS=/dev/null turns it off" 1 $?
+has "remember: off says so" "$out" "answers are off"
+
+rm -f "$ans"
+out=$(printf '\n' | A hint remember fakess 2>&1)
+status "hint remember: empty line cancels (exit 1)" 1 $?
+has "hint remember: cancel says nothing saved" "$out" "cancelled, nothing saved"
+[ -e "$ans" ] && bad "hint remember: cancel writes no file" || ok "hint remember: cancel writes no file"
+out=$(A hint remember fakess 2>&1 <<<"sudo fakess -ltnp 'sport = :8080'")
+status "hint remember: edited line saved (exit 0)" 0 $?
+has "hint remember: prompt shows the question" "$out" 'remember as the answer to "who is listening on port 8080" (lookup 2):'
+has "hint remember: prompt shows the command" "$out" "> sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
+has "hint remember: says the keys" "$out" "  Enter saves, Ctrl-C cancels. Not this line? Edit it."
+lacks "hint remember TOOL: no hint to name a tool" "$out" "name its tool"
+has "hint remember: without TOOL, says how to name one" \
+  "$(printf '\n' | A hint remember 2>&1)" "Not this line? Edit it, or name its tool: hint remember TOOL."
+has "hint remember: says where it was saved" "$out" "saved to"
+line "hint remember: the line as edited, with the question as its comment" "$(cat "$ans")" 1 \
+  "sudo fakess -ltnp 'sport = :8080'  # who is listening on port 8080"
+has "hint remember: file mode 600" "$(stat -c %a "$ans")" "600"
+printf '%s\n' '{"time": "2026-11-03T09:00:00", "query": "space used by the current release", "printed": []}' >> "$alog"
+A hint remember du >/dev/null 2>&1 <<<"du -sh /srv/current"
+has "hint remember: answers are appended" "$(wc -l <"$ans")" "2"
+line "hint remember: each answer goes with the last question" "$(cat "$ans")" 2 \
+  "du -sh /srv/current  # space used by the current release"
+
+out=$(hint remember -x 2>&1)
+status "hint remember -x: usage, exit 2" 2 $?
+printf '%s\n' 'yes | fakedock prune' > "$reply"
+hint remember my ssh key passphrase >/dev/null 2>&1
+has "remember + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "remember my ssh key passphrase"
+
+# In the index: built in, read as history, merged with the row of the same shape.
+has "sources: answers file listed as built in" "$(hintdb sources)" "$ans	(built in: hint remember)"
+has "sources: no answers yet" "$(HINTDB_ANSWERS="$tmp/none" hintdb sources)" "no answers yet"
+lacks "sources: answers off: not listed" "$(HINTDB_ANSWERS=/dev/null hintdb sources)" "built in: hint remember"
+has "sources: wrong file listed as built in" "$(hintdb sources)" "$tmp/wrong	(built in: hint forget, nothing marked yet)"
+lacks "sources: marks off: not listed" "$(HINTDB_WRONG=/dev/null hintdb sources)" "built in: hint forget"
+out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "space used by the current release" "df -h" 2>/dev/null)
+line "remembered row found by the question's words" "$out" 1 "du -sh /srv/current"
+line "remembered row: merged with the history row, the question as its note" "$out" 2 \
+  "  # your history x2: space used by the current release"
+out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "who is listening on port 8080" "netstat -tulpn" 2>/dev/null)
+has "remembered command found despite the wrong guessed tool" "$out" "sudo fakess -ltnp 'sport = :8080'"
+has "remembered command not on PATH is kept (it has a note)" "$out" "# your history x1: who is listening on port 8080"
+
+echo "== hint forget"
+# Its own sources: a reference history and a notes file; the live history
+# is not registered (forget still looks in it); the answers file is built in.
+fh="$tmp/forget-history" fold="$tmp/forget-old-history" fnotes="$tmp/forget-notes.md"
+printf '%s\n' 'echo keep' 'history -n 10' "fakess -l  'x'  # spaced" 'history -n 10  # again' \
+  'history -n' 'history -a; hint forget' > "$fh"
+printf '%s\n' 'echo old' 'history -n 10' > "$fold"
+printf '%s\n' '# Shell' '' '```bash' '$ history -n 10' '```' > "$fnotes"
+printf '%s\n' 'history -n 10  # show the last ten' > "$tmp/forget-answers"
+printf 'history\t%s\nauto\t%s\n' "$fold" "$fnotes" > "$tmp/forget-sources"
+F() { HISTFILE="$fh" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/forget-sources" \
+      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_WRONG="$tmp/forget-wrong" HINTDB_DB="$tmp/forget.db" "$@"; }
+sums() { md5sum "$fh" "$fold" "$fnotes" "$tmp/forget-answers"; }
+before=$(sums)
+
+has "forget: last command, skipping hint and history lines" "$(F hintdb forget 2>&1)" "fakess -l  'x'"
+has "forget TOOL: newest line with that tool" "$(F hintdb forget history 2>&1)" "history -n"
+out=$(F hintdb forget --where -- 'history -n 10' 2>&1)
+status "forget --where: found, exit 0" 0 $?
+line "forget --where: names the command" "$out" 1 "history -n 10 is in:"
+line "forget --where: live history first, comment ignored, not the shorter line" "$(tr -s ' ' <<<"$out")" 2 " $fh lines 2, 4"
+has "forget --where: a reference history" "$(tr -s ' ' <<<"$out")" "$fold line 2"
+has "forget --where: a notes file, by contained text" "$(tr -s ' ' <<<"$out")" "$fnotes line 4"
+has "forget --where: the answers file" "$(tr -s ' ' <<<"$out")" "$tmp/forget-answers line 1"
+out=$(F hintdb forget --where -- "fakess -l 'x'" 2>&1)
+has "forget --where: runs of spaces as one" "$out" "$fh  line 3"
+printf '%s\n' 'echo other' > "$tmp/other-history"
+out=$(HISTFILE="$tmp/other-history" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/forget-sources" \
+      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_DB="$tmp/forget.db" hintdb forget --where -- 'history -n 10' 2>&1)
+has "forget --where: other files listed" "$out" "$fold"
+out=$(F hintdb forget --where -- 'zzqq --nothing' 2>&1)
+status "forget --where: not found: exit 1" 1 $?
+has "forget --where: not found: says so" "$out" "is in none of your sources or your history file"
+out=$(HINTDB_LOG="$tmp/future-log" HISTFILE="$fh" HINTDB_SOURCES="$tmp/forget-sources" hint forget fakess 2>&1 </dev/null)
+status "forget TOOL: history not written since the last lookup: exit 1" 1 $?
+has "forget TOOL: stale history says what to run" "$out" "run:  history -a; hint forget fakess"
+
+fw="$tmp/forget-wrong"
+out=$(F hint forget history 2>&1 <<<$'history -n 10\n-n takes no count')
+status "hint forget: exit 0" 0 $?
+has "hint forget: asks which command" "$out" "which command?"
+has "hint forget: says the keys" "$out" "  Enter marks it WRONG, Ctrl-C cancels. Not this line? Edit it."
+has "hint forget: without TOOL, says how to name one" \
+  "$(printf '\n' | F hint forget 2>&1)" "or name its tool: hint forget TOOL."
+has "hint forget: offers the newest line" "$out" "> history -n"
+has "hint forget: asks for a reason" "$out" "reason (optional, Enter for none):"
+has "hint forget: says what it saved" "$out" "saved: history -n 10  # WRONG: -n takes no count"
+line "hint forget: the mark, with the reason, in the wrong file" "$(cat "$fw")" 1 \
+  "history -n 10  # WRONG: -n takes no count"
+has "hint forget: wrong file mode 600" "$(stat -c %a "$fw")" "600"
+has "hint forget: says where it still is" "$out" "hint now hides it. It is still in your history (up-arrow, Ctrl-R):"
+line "hint forget: live history first, one file per line" "$(grep -A1 'still in' <<<"$out" | tr -s ' ')" 2 " $fh lines 2, 4"
+has "hint forget: live history: the README" "$out" \
+  "Delete those lines to clean it up there too; see the README for editing history safely."
+lacks "hint forget: the new mark is not listed as a copy" "$out" "$fw"
+lacks "hint forget: the index no longer has it" "$(F hintdb query -n 30 history 2>&1)" "history -n 10"
+out=$(F hint forget history 2>&1 <<<$'history -n 10\nagain')
+status "hint forget: already marked: exit 0" 0 $?
+has "hint forget: already marked: says where" "$out" "history -n 10 is already marked WRONG: $fw line 1"
+lacks "hint forget: already marked: no reason asked" "$out" "reason (optional"
+has "hint forget: already marked: nothing saved" "$(wc -l <"$fw")" "1"
+out=$(F hint forget fakess 2>&1 <<<$'fakess -l \'x\'\n')
+line "hint forget: no reason: a bare WRONG!" "$(cat "$fw")" 2 "fakess -l 'x'  # WRONG!"
+has "hint forget: copies found with runs of spaces as one" "$(tr -s ' ' <<<"$out")" " $fh line 3"
+out=$(F hint forget fakess 2>&1 <<<$'zzqq --nowhere\n')
+line "hint forget: no copies anywhere: two lines" "$(grep -v '^which\|^  Enter\|^> \|^reason' <<<"$out")" 2 \
+  "hint now hides it."
+out=$(F env HINTDB_WRONG=/dev/null hint forget fakess 2>&1 <<<$'fakess -z\n')
+status "hint forget: marks off: exit 1" 1 $?
+has "hint forget: marks off: says so" "$out" "marks are off (HINTDB_WRONG=/dev/null)"
+lacks "hint forget: marks off: says so before any prompt" "$out" "which command?"
+n=$(wc -l <"$fw")
+out=$(printf '\n' | F hint forget 2>&1)
+status "hint forget: empty line cancels (exit 1)" 1 $?
+has "hint forget: cancel says nothing saved" "$out" "cancelled, nothing saved"
+has "hint forget: cancel: wrong file unchanged" "$(wc -l <"$fw")" "$n"
+if [ "$(sums)" = "$before" ]; then ok "hint forget: no file changed"; else bad "hint forget: no file changed" "$(sums)"; fi
+out=$(hint forget -x 2>&1)
+status "hint forget -x: usage, exit 2" 2 $?
+has "usage: forget" "$(hint help 2>&1)" "hint forget [TOOL]"
+printf '%s\n' 'nmcli connection delete home' > "$reply"
+hint forget a wifi network >/dev/null 2>&1
+has "forget + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "forget a wifi network"
+
+echo "== remember and forget after the question"
+# The question is in the history: only the lines after it count. forget
+# takes the first (the suggestion tried), answer the last (what worked).
+qh="$tmp/question-history" qlog="$tmp/question-log.jsonl"
+printf '%s\n' 'fakess -x old' 'hint show me the last history items' 'history -n 10' 'man history' \
+  'fc -ln -10' 'history --help' 'hint forget' > "$qh"
+printf '%s\n' '{"time": "2026-11-02T09:00:00", "query": "show me the last history items", "printed": []}' > "$qlog"
+Q() { HISTFILE="$qh" HINTDB_LOG="$qlog" HINTDB_SOURCES="$tmp/forget-sources" \
+      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_DB="$tmp/forget.db" "$@"; }
+out=$(Q hintdb forget 2>&1)
+line "forget: found the question" "$out" 1 "$(printf '1\tshow me the last history items\tafter')"
+line "forget: the first line after the question (history lines count now)" "$out" 2 "history -n 10"
+line "forget TOOL: the first TOOL line after the question" "$(Q hintdb forget history 2>&1)" 2 "history -n 10"
+line "forget TOOL: another tool" "$(Q hintdb forget fc 2>&1)" 2 "fc -ln -10"
+line "remember: the last line after the question, trivial ones skipped" "$(Q hintdb remember 2>&1)" 2 "fc -ln -10"
+line "remember TOOL: the last TOOL line after the question" "$(Q hintdb remember history 2>&1)" 2 "history --help"
+out=$(Q hintdb forget fakess 2>&1)
+status "forget TOOL only before the question: exit 1" 1 $?
+has "forget TOOL only before the question: not looked for there" "$out" \
+  'no fakess command since you asked "show me the last history items"'
+printf '%s\n' 'echo before' 'hint show me the last history items' > "$tmp/q-only"
+out=$(HISTFILE="$tmp/q-only" HINTDB_LOG="$qlog" hintdb remember 2>&1)
+status "remember: nothing run since the question: exit 1" 1 $?
+has "remember: nothing run since the question: says so" "$out" "no command since you asked"
+printf '%s\n' "hint 'what is' \"the  thing\"" 'fakess -q' > "$tmp/q-quoted"
+printf '%s\n' '{"time": "2026-11-02T09:00:00", "query": "what is the  thing", "printed": []}' > "$tmp/q-quoted-log"
+line "the question found through the shell's quoting" \
+  "$(HISTFILE="$tmp/q-quoted" HINTDB_LOG="$tmp/q-quoted-log" hintdb forget 2>&1)" 1 \
+  "$(printf '1\twhat is the  thing\tafter')"
+line "the last asking of the question counts" \
+  "$(printf '%s\n' 'hint show me the last history items' 'fakess -a' 'hint show me the last history items' 'fakess -b' > "$tmp/q-twice"; \
+     HISTFILE="$tmp/q-twice" HINTDB_LOG="$qlog" hintdb forget 2>&1)" 2 "fakess -b"
+printf '%s\n' 'hint show me the last history items' 'history 10' 'vim ~/.bash_history' 'hint remember' > "$tmp/q-trivial"
+out=$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb remember 2>&1)
+status "remember: only trivial lines since the question: exit 1" 1 $?
+has "remember: only trivial lines: says so" "$out" 'only trivial commands since you asked "show me the last history items";'
+has "remember: only trivial lines: each with the command that takes it, in order" "$out" \
+  "$(printf '  history 10            hint remember history\n  vim ~/.bash_history   hint remember vim')"
+has "forget TOOL: only lines of another tool after the question: not found there" \
+  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb forget fakess 2>&1)" "no fakess command since you asked"
+line "remember TOOL: a trivial line found when its tool is named" \
+  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb remember history 2>&1)" 2 "history 10"
+out=$(Q hint forget 2>&1 </dev/null)
+has "hint forget: says it starts after the question" "$out" \
+  'which command? the first after "show me the last history items" (lookup 1):'
+out=$(printf '\n' | F hint forget 2>&1)
+lacks "hint forget: no question in the log, no note" "$out" "not in your history file"
+out=$(printf '\n' | A hint remember 2>&1)
+has "hint remember: question not in history: says the newest is offered" "$out" \
+  "(your last question is not in your history file: this is your newest command)"
+
+echo "== WRONG marker"
+# Own sources and index: a history with marks and near misses, a notes
+# file with a copy of a marked command.
+wh="$tmp/wrong-history" wn="$tmp/wrong-notes.md"
+printf '%s\n' 'fakess -n 10' 'fakess -n 10  # WRONG!' 'fakess -n' 'fakess -r  # WRONG: -r is not a flag' \
+  'fakess -b  # WRONG' 'fakess -p  # WRONG permissions fixed' 'fakess -w  # Wrong!' \
+  'fakess -z  # WRONGLY named' 'fakess -q  # fix wrong permissions' 'fakess -n   10' > "$wh"
+printf '%s\n' '# Sockets' '' '```bash' 'fakess -n 10' 'fakess -l' '```' > "$wn"
+printf 'history\t%s\nauto\t%s\n' "$wh" "$wn" > "$tmp/wrong-sources"
+W() { HISTFILE="$wh" HINTDB_LOG="$tmp/no-such-log" HINTDB_SOURCES="$tmp/wrong-sources" \
+      HINTDB_ANSWERS="$tmp/none" HINTDB_DB="$tmp/wrong.db" HINTDB_NO_MAN=1 "$@"; }
+W hintdb rebuild >/dev/null
+widx=$(python3 - "$tmp/wrong.db" <<'EOF2'
+import sqlite3, sys
+for (v,) in sqlite3.connect(sys.argv[1]).execute("SELECT display FROM entries"):
+    print(v)
+EOF2
+)
+lacks "WRONG!: the command is not indexed" "$widx" "fakess -n 10"
+lacks "WRONG: reason: not indexed" "$widx" "fakess -r"
+lacks "bare WRONG: not indexed" "$widx" "fakess -b"
+lacks "WRONG then a word: still a mark" "$widx" "fakess -p"
+has "another command of the same tool stays" "$widx" "fakess -n"
+has "Wrong! (not capitals) is a note, not a mark" "$widx" "fakess -w"
+has "WRONGLY (not a whole word) is a note, not a mark" "$widx" "fakess -z"
+has "wrong later in the comment is a note, not a mark" "$widx" "fakess -q"
+has "the notes file's other command stays" "$widx" "fakess -l"
+out=$(W hintdb stats 2>&1)
+has "stats: lists marked commands" "$out" "marked WRONG (never shown by hint):"
+has "stats: each mark with file, line and comment" "$(tr -s ' ' <<<"$out")" " fakess -r $wh line 4: WRONG: -r is not a flag"
+
+out=$(W hintdb forget --where -- 'fakess -n 10' 2>&1)
+has "forget --where: says the command is already marked, and where" "$out" \
+  "fakess -n 10 is already marked WRONG: $wh line 2"
+has "forget: lists the unmarked copies (spaces as one), not the marked line" "$(tr -s ' ' <<<"$out")" " $wh lines 1, 10"
+has "forget: the notes copy is listed" "$(tr -s ' ' <<<"$out")" " $wn line 4"
+has "forget --where: already marked: the unmarked copies under their own heading" "$out" "Unmarked copies:"
+out=$(W hintdb forget --where -- 'fakess -l' 2>&1)
+has "forget --where: only in a notes file" "$(tr -s ' ' <<<"$out")" " $wn line 5"
+sed -i 's/  # WRONG!$//' "$wh"
+has "removing the mark brings the command back" "$(W hintdb query -n 30 fakess 2>&1)" "fakess -n 10"
+
+# A model guess the user marked WRONG: labelled, and printed after the others.
+printf '%s\n' 'fakess -b  # WRONG' 'fakess -n 10' 'fakess -n 10  # WRONG: -n takes no count' > "$tmp/wrong-history2"
+printf 'history\t%s\n' "$tmp/wrong-history2" > "$tmp/wrong-sources2"
+W2() { HINTDB_SOURCES="$tmp/wrong-sources2" HINTDB_ANSWERS="$tmp/none" HINTDB_DB="$tmp/wrong2.db" \
+       HINTDB_NO_MAN=1 HINTDB_LOG=/dev/null "$@"; }
+out=$(W2 hintdb find -q "list sockets" "fakess -n 10" "fakess -l" 2>&1)
+line "marked guess: not first" "$out" 1 "fakess -l"
+line "marked guess: after the other guesses" "$out" 3 "fakess -n 10"
+line "marked guess: labelled with the user's mark" "$out" 4 \
+  "  # WRONG: -n takes no count (model suggestion, marked by you)"
+has "marked guess: shown in --debug" "$(W2 hintdb find --debug -q "list sockets" "fakess -n 10" 2>&1 >/dev/null)" \
+  "marked WRONG by the user, printed last: fakess -n 10"
+has "marked guess: a bare mark is shown as WRONG" "$(W2 hintdb find -q "list sockets" "fakess -b" 2>&1)" \
+  "  # WRONG (model suggestion, marked by you)"
+printf '%s\n' 'zzqqtool -x  # WRONG!' >> "$tmp/wrong-history2"
+has "marked guess, tool not installed: marked in the model's list" \
+  "$(W2 hintdb find -q "frobnicate the widget" "zzqqtool -x" 2>&1)" "#   zzqqtool -x   (WRONG!, marked by you)"
+
+echo "== forget from the last lookup's output"
+# Nothing run since the question (or only trivial lines): choose from the
+# commands the last lookup printed, so a wrong suggestion is marked unrun.
+lh="$tmp/list-history" llog="$tmp/list-log.jsonl" lw="$tmp/list-wrong"
+printf '%s\n' 'fakess -x old' 'hint show me the last history items' 'man history' > "$lh"
+jq -cn '{time: "2026-11-02T09:00:00", query: "show me the last history items", printed: [
+  "history 10", "  # your history x1: show last 10 commands",
+  "history -n 10", "  # model suggestion",
+  "ssh -L 8080:localhost:80 user@<HOST>", "  # your history x2; e.g. ssh -L 8080:localhost:80 user@gpu1.example.org",
+  "fc -ln -10", "  # model suggestion",
+  "history 10", "  # model suggestion",
+  "# see man history(1): GNU History Library",
+  "# found in notes.md, but zzqqtool is not installed here:", "#   zzqqtool -l"]}' > "$llog"
+printf '%s\n' 'fc -ln -10  # WRONG: already' > "$tmp/list-marked"
+printf 'history\t%s\n' "$tmp/list-marked" > "$tmp/list-sources"
+L() { HISTFILE="$lh" HINTDB_LOG="$llog" HINTDB_SOURCES="$tmp/list-sources" HINTDB_WRONG="$lw" \
+      HINTDB_ANSWERS="$tmp/none" HINTDB_DB="$tmp/list.db" "$@"; }
+out=$(L hintdb forget 2>&1)
+line "forget list: header with the question" "$out" 1 "$(printf '1\tshow me the last history items\tlist')"
+if [ "$(tail -n +2 <<<"$out")" = "$(printf '%s\n' 'history 10' 'history -n 10' 'zzqqtool -l')" ]; then
+  ok "forget list: commands in order, once each; no status lines, templates or marked commands"
+else bad "forget list: commands in order, once each; no status lines, templates or marked commands" "$out"; fi
+out=$(L hint forget 2>&1 <<<$'2\nhistory -n 10\n-n takes no count')
+status "hint forget list: exit 0" 0 $?
+has "hint forget list: asks from which lookup" "$out" 'which command? from "show me the last history items" (lookup 1):'
+has "hint forget list: numbered" "$out" "  2  history -n 10"
+has "hint forget list: asks for a number" "$out" "number (Ctrl-C cancels):"
+has "hint forget list: then the editable line" "$out" "> history -n 10"
+line "hint forget list: saved" "$(cat "$lw")" 1 "history -n 10  # WRONG: -n takes no count"
+lacks "hint forget list: the history file is unchanged" "$(cat "$lh")" "history -n 10"
+out=$(L hint forget 2>&1 <<<$'9\n')
+status "hint forget list: a number not in the list: exit 1" 1 $?
+has "hint forget list: says so" "$out" "not a number from the list, nothing saved"
+out=$(L hint forget 2>&1 <<<$'\n')
+status "hint forget list: empty answer cancels" 1 $?
+has "hint forget list: the marked command is left out next time" "$(L hintdb forget 2>&1)" "$(printf 'history 10\nzzqqtool -l')"
+printf '%s\n' '{"time": "2099-01-01T09:00:00", "query": "asked on a server", "printed": ["history 10"]}' > "$tmp/list-future"
+line "forget list: history not written since the question: the list too" \
+  "$(HINTDB_LOG="$tmp/list-future" L env HINTDB_LOG="$tmp/list-future" hintdb forget 2>&1)" 2 "history 10"
+printf '%s\n' '{"time": "2026-11-02T09:00:00", "query": "show me the last history items", "printed": []}' > "$tmp/list-empty"
+out=$(L env HINTDB_LOG="$tmp/list-empty" hintdb forget 2>&1)
+status "forget list: nothing printed: exit 1" 1 $?
+has "forget list: nothing printed: says so" "$out" "nothing to mark"
 
 echo
 echo "$pass passed, $fail failed"

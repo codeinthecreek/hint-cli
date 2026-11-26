@@ -2,8 +2,10 @@
 # hint - natural-language command lookup.
 #
 #   hint how do I create an ssh tunnel
-#   hint history tunnel        past questions containing "tunnel"
-#   hint search ssh            past answers containing "ssh"
+#   hint history               your last 10 lookups
+#   hint grep tunnel           past lookups whose question or commands contain "tunnel"
+#   hint remember [TOOL]         save the command that answered the last question
+#   hint forget [TOOL]         mark a wrong command, so hint never shows it
 #
 # 1. An LLM (Ollama chat API) guesses 1-3 commands for the request.
 # 2. hintdb find looks up the user's own history/notes rows for the request,
@@ -26,128 +28,221 @@ set -o pipefail
 usage() {
   cat >&2 <<'EOF'
 usage: hint <what you want to do>
-       hint history [OPTIONS] [WORD|N]
-                                       past questions: the last 10, those
-                                       with WORD, or the last N
-       hint search [OPTIONS] WORD      past commands containing WORD
-       hint history --show NUM         the full answer of past question NUM
-       hint -H, --history [OPTIONS] [WORD...]
-                                       past questions containing all WORDs
-       hint -S, --search [OPTIONS] WORD...
-                                       past commands containing all WORDs
+       hint history [N]                your last 10 lookups, or the last N,
+                                       like bash history
+       hint history --show NUM         the full answer of lookup NUM, with
+                                       each of your rows' source files
+       hint history --delete NUM[,NUM|NUM-NUM]...
+                                       delete lookups from the log; the others
+                                       keep their numbers, and nothing is
+                                       deleted if a NUM is not there
+       hint grep [-c] WORD             past lookups whose question or commands
+                                       contain WORD, with the commands that
+                                       matched; -c: just the number
+       hint remember [TOOL]            save your last command (or your last
+                                       TOOL command) as the answer to the
+                                       last question, after you confirm it
+       hint forget [TOOL]              mark the first command after the last
+                                       question (or the first TOOL command)
+                                       WRONG, so hint never shows it again
        hint -h, --help                 this help
-OPTIONS, anywhere after history, search, -H or -S:
-  -n, --last N     only the last N matching lines (default 10)
-  -c, --count      print the number of matching lines instead
-After history or -H only, and on its own (no WORD, -n or -c):
-  -s, --show NUM   the full answer of entry NUM (the number that
-                   history and search print), with each of your rows'
-                   source files
-  -d, --delete NUM[,NUM|NUM-NUM]...
-                   delete entries from the log; the others keep their
-                   numbers, and nothing is deleted if a NUM is not there
-With a second WORD, the line is a question for the model instead:
-  hint history without duplicates
+For several words, quote them:  hint grep "ssh key"
+Unquoted, a second word makes the line a question for the model instead:
+  hint grep recursively for a word
 An unknown option prints this help.
 EOF
   exit 2
 }
 
-# past MODE FORM ARGS...   look up past lookups in the query log (hintdb log).
-# MODE: history (match the question) or search (match the printed lines).
-# FORM: "word" for `hint history WORD`, so a miss says how to ask instead.
-past() {
-  local mode=$1 form=$2 count= show= del= last= rc
-  local opts=() words=()
-  shift 2
-  [ "$mode" = search ] && opts=(--printed)
+# need_number OPTION VALUE   VALUE must be an entry number, or exit 2.
+need_number() {
+  [[ $2 =~ ^[1-9][0-9]*$ ]] || { echo "hint: $1 needs an entry number" >&2; exit 2; }
+}
+
+# history [N] | history --show NUM | history --delete NUMS
+# List past lookups like bash `history`: the last 10, or the last N.
+# Finding them by a word is `hint grep`.
+history_cmd() {
+  local show= del= last=
   while [ $# -gt 0 ]; do
     case "$1" in
-      -n|--last|--last=*)
-        local n
-        if [ "$1" = -n ] || [ "$1" = --last ]; then
-          [ $# -ge 2 ] || usage
-          n=$2; shift
-        else
-          n=${1#--last=}
-        fi
-        [[ $n =~ ^[1-9][0-9]*$ ]] || { echo "hint: --last needs a number of 1 or more" >&2; exit 2; }
-        opts+=(--last "$n"); last=1 ;;
-      -s|--show|--show=*)
-        if [ "$1" = -s ] || [ "$1" = --show ]; then
-          [ $# -ge 2 ] || usage
-          show=$2; shift
-        else
-          show=${1#--show=}
-        fi
-        [[ $show =~ ^[1-9][0-9]*$ ]] || { echo "hint: --show needs an entry number" >&2; exit 2; } ;;
-      -d|--delete|--delete=*)
-        if [ "$1" = -d ] || [ "$1" = --delete ]; then
-          [ $# -ge 2 ] || usage
-          del=$2; shift
-        else
-          del=${1#--delete=}
-        fi
-        [[ $del =~ ^[1-9][0-9]*(-[1-9][0-9]*)?(,[1-9][0-9]*(-[1-9][0-9]*)?)*$ ]] || {
-          echo "hint: --delete needs entry numbers: N, N,M or N-M" >&2; exit 2; } ;;
-      -c|--count) opts+=(--count); count=1 ;;
+      -s|--show) [ $# -ge 2 ] || usage; show=$2; shift; need_number --show "$show" ;;
+      --show=*) show=${1#--show=}; need_number --show "$show" ;;
+      -d|--delete) [ $# -ge 2 ] || usage; del=$2; shift ;;
+      --delete=*) del=${1#--delete=} ;;
+      -?*) usage ;;
+      *) [ -z "$last" ] || usage; last=$1 ;;
+    esac
+    shift
+  done
+  command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
+  if [ -n "$del" ]; then
+    [[ $del =~ ^[1-9][0-9]*(-[1-9][0-9]*)?(,[1-9][0-9]*(-[1-9][0-9]*)?)*$ ]] || {
+      echo "hint: --delete needs entry numbers: N, N,M or N-M" >&2; exit 2; }
+  fi
+  # --show and --delete stand alone.
+  if [ -n "$show$del" ]; then
+    [ -z "$last" ] && [ -z "$show" -o -z "$del" ] || usage
+    [ -n "$show" ] && exec hintdb log --show "$show"
+    exec hintdb log --delete "$del"
+  fi
+  if [ -n "$last" ] && ! [[ $last =~ ^[1-9][0-9]*$ ]]; then
+    echo "hint: history takes a number; to find past lookups with \"$last\":  hint grep $last" >&2
+    exit 2
+  fi
+  hintdb log --last "${last:-10}" || { echo "hint: no past lookups yet" >&2; exit 1; }
+}
+
+# grep [-c] WORD   past lookups whose question or printed commands contain
+# WORD (a quoted phrase: all its words), each with the commands that matched.
+grep_cmd() {
+  local count= words=() rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -c|--count) count=1 ;;
       --) shift; words+=("$@"); break ;;
       -?*) usage ;;
       *) words+=("$1") ;;
     esac
     shift
   done
+  [ ${#words[@]} -eq 1 ] || usage
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
-  # --show and --delete stand alone: no words, --last, --count or each other.
-  if [ -n "$show$del" ]; then
-    [ "$mode" = history ] && [ ${#words[@]} -eq 0 ] && [ -z "$count$last" ] \
-      && [ -z "$show" -o -z "$del" ] || usage
-    [ -n "$show" ] && exec hintdb log --show "$show"
-    exec hintdb log --delete "$del"
+  if [ -n "$count" ]; then
+    hintdb log --count -- "${words[@]}"
+    exit $?
   fi
-  # `hint history 20`: a lone number is the last N, not a word.
-  if [ "$form" = word ] && [ "$mode" = history ] && [ ${#words[@]} -eq 1 ] \
-     && [[ ${words[0]} =~ ^[1-9][0-9]*$ ]]; then
-    [ -z "$count" ] && opts+=(--last "${words[0]}")
-    words=()
-  fi
-  [ "$mode" = search ] && [ ${#words[@]} -eq 0 ] && usage
-  hintdb log "${opts[@]}" -- "${words[@]}"
+  hintdb log --all -- "${words[@]}"
   rc=$?
-  if [ "$rc" -eq 1 ] && [ -z "$count" ]; then
-    local what="questions"
-    [ "$mode" = search ] && what="commands"
-    if [ ${#words[@]} -eq 0 ]; then
-      echo "hint: no past $what yet" >&2
-    elif [ "$form" = word ]; then
-      echo "hint: no past $what contain \"${words[*]}\"; to ask it as a question, add a word" >&2
-    else
-      echo "hint: no past $what contain \"${words[*]}\"" >&2
-    fi
-  fi
+  [ "$rc" -eq 1 ] && echo "hint: no past lookups contain \"${words[*]}\"; to ask it as a question, add a word" >&2
   exit "$rc"
+}
+
+# edit_line DEFAULT   show DEFAULT on an editable line (a plain read when
+# stdin is not a terminal: tests, pipes) and set $line to what was entered.
+# An empty line or Ctrl-C cancels: exit 1 / 130, with "nothing $done".
+edit_line() {
+  local done=$2
+  trap 'echo >&2; echo "hint: cancelled, nothing $done" >&2; exit 130' INT
+  if [ -t 0 ]; then
+    IFS= read -r -e -i "$1" -p '> ' line || line=
+  else
+    printf '> %s\n' "$1" >&2
+    IFS= read -r line || line=
+  fi
+  trap - INT
+  if [ -z "${line//[[:space:]]/}" ]; then
+    echo "hint: cancelled, nothing $done" >&2
+    exit 1
+  fi
+}
+
+# keys_help WHAT VERB NARGS   the line under the prompt's header: the keys,
+# and how to reach another line (edit it; without a TOOL, name one).
+keys_help() {
+  local other="Not this line? Edit it"
+  [ "$3" -eq 0 ] && other+=", or name its tool: hint $2 TOOL"
+  printf '  %s, Ctrl-C cancels. %s.\n' "$1" "$other" >&2
+}
+
+# not_found_note   the last question is not in the history file, so the
+# newest line is offered instead of one after the question.
+not_found_note() {
+  echo "  (your last question is not in your history file: this is your newest command)" >&2
+}
+
+# remember [TOOL]   save the last command (or the last TOOL command) in the
+# history file as the answer to the last question, after the user confirms
+# or edits it. hintdb picks both; nothing is saved without the prompt.
+remember() {
+  local cand n q where cmd line
+  command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
+  cand=$(hintdb remember -- "$@") || exit 1
+  { IFS=$'\t' read -r n q where; IFS= read -r cmd; } <<<"$cand"
+  printf 'remember as the answer to "%s" (lookup %s):\n' "$q" "$n" >&2
+  [ "$where" = after ] || not_found_note
+  keys_help "Enter saves" remember $#
+  edit_line "$cmd" saved
+  hintdb remember --save -q "$q" -- "$line"
+}
+
+# forget [TOOL]   mark the first command after the last question (or the
+# first TOOL command), as edited, WRONG in hint's own wrong file, with an
+# optional reason. hint then never shows it. No source is changed. When
+# nothing was run since the question, choose from the commands the last
+# lookup printed instead, so a wrong suggestion can be marked unrun.
+forget() {
+  local cand n q where cmd line reason
+  command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
+  cand=$(hintdb forget -- "$@") || exit 1
+  { IFS=$'\t' read -r n q where; IFS= read -r cmd; } <<<"$cand"
+  if [ "$where" = list ]; then
+    # Nothing run since the question: choose from what the lookup printed.
+    local cmds i=0 num
+    mapfile -t cmds < <(tail -n +2 <<<"$cand")
+    printf 'which command? from "%s" (lookup %s):\n' "$q" "$n" >&2
+    for cmd in "${cmds[@]}"; do i=$((i + 1)); printf '  %d  %s\n' "$i" "$cmd" >&2; done
+    trap 'echo >&2; echo "hint: cancelled, nothing saved" >&2; exit 130' INT
+    if [ -t 0 ]; then
+      IFS= read -r -e -p 'number (Ctrl-C cancels): ' num || num=
+    else
+      echo "number (Ctrl-C cancels):" >&2
+      IFS= read -r num || num=
+    fi
+    trap - INT
+    if ! [[ $num =~ ^[1-9][0-9]*$ ]] || [ "$num" -gt ${#cmds[@]} ]; then
+      echo "hint: not a number from the list, nothing saved" >&2
+      exit 1
+    fi
+    cmd=${cmds[num - 1]}
+    echo "  Enter marks it WRONG, Ctrl-C cancels. Not this line? Edit it." >&2
+  elif [ "$where" = after ]; then
+    printf 'which command? the first after "%s" (lookup %s):\n' "$q" "$n" >&2
+  else
+    echo "which command?" >&2
+    [ -n "$q" ] && not_found_note
+  fi
+  [ "$where" = list ] || keys_help "Enter marks it WRONG" forget $#
+  edit_line "$cmd" saved
+  hintdb forget --marked -- "$line" && exit 0
+  echo "reason (optional, Enter for none):" >&2
+  trap 'echo >&2; echo "hint: cancelled, nothing saved" >&2; exit 130' INT
+  if [ -t 0 ]; then
+    IFS= read -r -e -p '> ' reason || reason=
+  else
+    IFS= read -r reason || reason=
+  fi
+  trap - INT
+  hintdb forget --save --reason "$reason" -- "$line"
 }
 
 [ $# -gt 0 ] || usage
 case "$1" in
   -h|--help) usage ;;
-  -H|--history) shift; past history flag "$@" ;;
-  -S|--search) shift; past search flag "$@" ;;
-  # history alone: the last 10 lookups; search alone: usage (it needs a word).
-  # At most one plain word plus options: a log lookup. Two or more plain
-  # words: a question (falls through).
-  history|search)
-    [ $# -eq 1 ] && [ "$1" = search ] && usage
+  # history: at most one plain word (N) plus its options. grep: one WORD
+  # (a quoted phrase is one) plus -c. Two or more plain words: a question
+  # (falls through), so "history without duplicates" and "grep recursively
+  # for a word" are asked as usual.
+  history|grep)
     plain=0 skip=
     for a in "${@:2}"; do
       if [ -n "$skip" ]; then skip=; continue; fi
       case "$a" in
-        -n|--last|-s|--show|-d|--delete) skip=1 ;;
+        -s|--show|-d|--delete) skip=1 ;;
         -?*) ;;
         *) plain=$((plain + 1)) ;;
       esac
     done
-    [ "$plain" -le 1 ] && past "$1" word "${@:2}" ;;
+    if [ "$plain" -le 1 ]; then
+      op=$1; shift; "${op}_cmd" "$@"; exit $?
+    fi ;;
+  # remember or forget alone or with one TOOL. Two or more words: a question
+  # ("remember my ssh key passphrase", "forget a wifi network").
+  remember|forget)
+    if [ $# -le 2 ]; then
+      case "${2:-}" in -?*) usage ;; esac
+      op=$1; shift; "$op" "$@"; exit $?
+    fi ;;
 esac
 # "help" alone is a command; "help me ..." is a question.
 [ $# -eq 1 ] && [ "$1" = help ] && usage
