@@ -4,6 +4,7 @@
 #   hint how do I create an ssh tunnel
 #   hint history tunnel        past questions containing "tunnel"
 #   hint search ssh            past answers containing "ssh"
+#   hint answer [TOOL]         save the command that answered the last question
 #
 # 1. An LLM (Ollama chat API) guesses 1-3 commands for the request.
 # 2. hintdb find looks up the user's own history/notes rows for the request,
@@ -31,6 +32,9 @@ usage: hint <what you want to do>
                                        with WORD, or the last N
        hint search [OPTIONS] WORD      past commands containing WORD
        hint history --show NUM         the full answer of past question NUM
+       hint answer [TOOL]              save your last command (or your last
+                                       TOOL command) as the answer to the
+                                       last question, after you confirm it
        hint -H, --history [OPTIONS] [WORD...]
                                        past questions containing all WORDs
        hint -S, --search [OPTIONS] WORD...
@@ -128,6 +132,31 @@ past() {
   exit "$rc"
 }
 
+# answer [TOOL]   save the last command (or the last TOOL command) in the
+# history file as the answer to the last question, after the user confirms
+# or edits it. hintdb picks both; nothing is saved without the prompt.
+answer() {
+  local cand n q cmd line
+  command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
+  cand=$(hintdb answer -- "$@") || exit 1
+  { IFS=$'\t' read -r n q; IFS= read -r cmd; } <<<"$cand"
+  printf 'answer to %s "%s":\n' "$n" "$q" >&2
+  trap 'echo >&2; echo "hint: cancelled, nothing saved" >&2; exit 130' INT
+  if [ -t 0 ]; then
+    IFS= read -r -e -i "$cmd" -p '> ' line || line=
+  else
+    # Not a terminal (tests, pipes): the line read is the command to save.
+    printf '> %s\n' "$cmd" >&2
+    IFS= read -r line || line=
+  fi
+  trap - INT
+  if [ -z "${line//[[:space:]]/}" ]; then
+    echo "hint: cancelled, nothing saved" >&2
+    exit 1
+  fi
+  hintdb answer --save -q "$q" -- "$line"
+}
+
 [ $# -gt 0 ] || usage
 case "$1" in
   -h|--help) usage ;;
@@ -148,6 +177,13 @@ case "$1" in
       esac
     done
     [ "$plain" -le 1 ] && past "$1" word "${@:2}" ;;
+  # answer alone or with one TOOL: save an answer. Two or more words: a
+  # question ("answer yes to all prompts").
+  answer)
+    if [ $# -le 2 ]; then
+      case "${2:-}" in -?*) usage ;; esac
+      shift; answer "$@"; exit $?
+    fi ;;
 esac
 # "help" alone is a command; "help me ..." is a question.
 [ $# -eq 1 ] && [ "$1" = help ] && usage

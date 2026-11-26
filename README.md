@@ -158,6 +158,38 @@ A comment on a command makes it findable by what it does, next time:
 ssh-keygen -R oldhost.example.org  # remove old host key known_hosts
 ```
 
+### When hint didn't find it
+
+If hint missed and you found the command some other way, run it, then tell
+hint it was the answer:
+
+```bash
+hint answer
+```
+
+hint shows your last question and your last command, on a line you can
+edit. Press Enter to save it, or Ctrl-C to cancel. The question is saved as
+a comment on the command, so the next similar question finds it, even if
+the model guesses the wrong tool again.
+
+If you ran other commands after it, name the command's tool instead. This
+takes the last line that runs `ss`, also inside a pipeline:
+
+```bash
+hint answer ss
+```
+
+`hint answer` reads your history file, so the command has to be written to
+it first. With `history -a` in `PROMPT_COMMAND` (see Install) it always is.
+Without it, for example on a server, write it first:
+
+```bash
+history -a; hint answer
+```
+
+Answers are kept in `~/.local/share/hintdb/answers`, one `command  #
+question` line each. To change or remove one, edit that file.
+
 ### Past lookups
 
 Every lookup is kept in a local query log, and these commands read it
@@ -215,6 +247,8 @@ hint -H ssh key
 | `HINTDB_SOURCES` | `~/.config/hintdb/sources` | list of sources |
 | `HINTDB_APROPOS` | `apropos .` | command that lists man page summaries (for testing) |
 | `HINTDB_LOG` | `~/.local/share/hintdb/queries.jsonl` | query log; `/dev/null` turns it off |
+| `HINTDB_ANSWERS` | `~/.local/share/hintdb/answers` | answers saved by `hint answer`; `/dev/null` turns them off |
+| `HISTFILE` | `~/.bash_history` | the history `hint answer` reads; export it if yours is elsewhere |
 
 The query log stays on your machine, like your shell history, and contains
 commands from it.
@@ -242,6 +276,7 @@ commands from it.
 | `-c`, `--count` | print the number of matching lines instead |
 | `-s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
 | `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
+| `answer [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
 
 `-n` and `-c` work after `history`, `search`, `-H` and `-S`. `--show` and
 `--delete` work only after `history` and `-H`, on their own. `hint help`
@@ -260,6 +295,7 @@ prints the usage; `hint help me ...` is a question.
 | `hintdb stats --source PATH` | the rows from one source file or directory, most used first |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log ...` | read and edit the query log (used by `hint history` and `hint search`) |
+| `hintdb answer [TOOL]` | the last question and the command that answers it (used by `hint answer`) |
 | `hintdb query [-n N] WORDS...` | the search for the words alone, with scores (debugging) |
 
 Source kinds are detected from the file name. Use `--kind` to override, for

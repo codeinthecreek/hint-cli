@@ -418,7 +418,7 @@ other words, so the limitation stays (README).
 ## Index
 
 - **Sources:** bash history, markdown and text notes, justfiles, Makefiles,
-  git and bash aliases. Man NAME lines (sections 1 and 8, from `apropos .`)
+  git and bash aliases, and the built-in answers file (see Answers). Man NAME lines (sections 1 and 8, from `apropos .`)
   go into a separate `man.db`. Direction agreed 2026-11-18: notes only when
   targeted (such as a Kubernetes cheatsheet), not folders of old notes from
   another platform; add recipe files, git aliases and bash aliases (done).
@@ -515,8 +515,8 @@ other words, so the limitation stays (README).
 ## Query log
 
 - **Purpose:** a record of real lookups, for looking up past answers
-  (`hint history`, `hint search`), per-source usage and, later, which
-  printed line was used.
+  (`hint history`, `hint search`), per-source usage, and the question that
+  `hint answer` answers (see Answers).
 - **Written by `hintdb find`** from the command line, after the answer is
   printed, one JSON line per lookup: `time` (local, ISO), `query`,
   `guesses` (as passed), `printed` (the lines exactly as shown) and `rows`
@@ -582,6 +582,103 @@ other words, so the limitation stays (README).
   (2026-11-20). `hint help` is the way to the usage.
 - **Private:** like shell history it holds the user's commands; it stays
   local and is never committed. Tests point it into their scratch directory.
+
+## Answers
+
+Agreed and built 2026-11-26.
+
+- **Purpose:** when a lookup missed and the user found the command some
+  other way, `hint answer` saves the question as a comment on that
+  command, so the next similar question finds it. A wrong tool guess was
+  behind most misses (26 of 30, 2026-11-18); with the question's words on
+  the user's row, the row is found even when the model guesses the same
+  wrong tool again. It works like a `# comment` the user writes in
+  history: the user's own words on the user's own command.
+- **Not a change to the guess.** The model's prompt and reply are
+  untouched, and there is no extra model call. Past (question, command)
+  pairs as worked examples in the prompt were considered and not taken:
+  worked examples were tried and rejected (see Lookup), and examples that
+  change with every lookup would be hard to measure. This is a match
+  change and is measured as one.
+- **Explicit, never automatic.** Learning from whatever was run after a
+  lookup was rejected: a mistyped flag would be remembered, and with
+  several terminals writing to one history file the lines after a lookup
+  may come from another terminal.
+- **Form:** `hint answer [TOOL]`. Same rule as `history` and `search`: a
+  command when at most one plain word follows, a question with two or
+  more (`hint answer yes to all prompts` is a question).
+- **Usual sequence:** `hint QUESTION`, then the user tries commands until
+  one works, then `hint answer`. The user is not expected to do other work
+  in between, so the answer is taken to belong to the last lookup.
+- **The question:** the last lookup in the query log, as hint received it.
+  It is shown at the prompt, so a lookup made from another terminal in the
+  meantime is seen and cancelled.
+- **The history file read** is the one bash is writing now: `$HISTFILE` if
+  it is exported, else `~/.bash_history` (the rule `hintdb` uses to
+  register history on first use). It is never chosen from the registered
+  sources: other history files there (old ones, other machines') are for
+  reference, not the current session. A history file elsewhere needs
+  `export HISTFILE` in `.bashrc`. Reading it does not require it to be a
+  registered source.
+- **Not written yet:** a script cannot read the shell's history in memory,
+  only the file. If the file was last modified before the last lookup's
+  time, the commands run since are not in it; hint says so, suggests
+  `history -a; hint answer`, and exits 1 without a prompt. With `history
+  -a` in `PROMPT_COMMAND` (the README's setup) the file is always current.
+  Without it (servers), the documented form is `history -a; hint answer`,
+  not an alias: an alias line would itself be taken as the last command.
+  The check can miss: if another shell writes the file (e.g. on exit)
+  between the lookup and the answer, the file is newer but this session's
+  lines are not in it, and the prompt offers an older command, which the
+  user sees and cancels.
+- **Which line.** The file is read from the end. Timestamp lines
+  (`#1700000000`) are skipped. Each line is split into its commands as the
+  index does (`|`, `;`, `&&`, `||`; `sudo`, `env` and the like skipped; a
+  command's path dropped, so `/usr/sbin/ss` is `ss`), except that an
+  unquoted `;`, `|` or `&` also separates when it touches a word: the
+  index's tokens keep `-a;` whole, so `history -a;hint answer` was not
+  seen as running `hint` (found by the tests). The index is unchanged.
+  - Always skipped: lines that run `hint` (the `hint answer` line itself,
+    in case `history -a` wrote it; not checked on a real terminal).
+  - `hint answer`: the newest line that is not trivial by the index's rule
+    (`cd /etc`, `ls`) and not made only of `history` and `fc` commands
+    (housekeeping such as `history -a`).
+  - `hint answer TOOL`: the newest line in which any command is TOOL, with
+    nothing else skipped: naming the tool means that tool is wanted, so
+    `hint answer history` finds `history -d 1234` and `hint answer grep`
+    finds `ps aux | grep nginx`.
+  - No limit on how far back: an older match is shown at the prompt and
+    cancelled. Stopping at the question's own `hint` line in the file was
+    not taken: finding it means matching the typed line, quotes and all.
+- **Prompt:** the question, then the command on an editable line (`read -e
+  -i` from the terminal), so a typo or a one-off value can be fixed before
+  saving. Enter saves, Ctrl-C or an empty line cancels.
+- **Saved:** the whole line as edited, not only the TOOL part, so it has
+  the shape of the user's existing row and merges with it. One line
+  `COMMAND  # QUESTION` appended to the answers file: `HINTDB_ANSWERS`,
+  default `~/.local/share/hintdb/answers` (`/dev/null` turns answers off).
+  Mode 0600, one `O_APPEND` write under `flock`, as for the query log.
+  Answers are per machine, like the index. To undo one, edit the file.
+- **In the index:** built in, like the query log, not registered in the
+  sources file: hint does not edit the user's sources, and a missing
+  answers file means no answers yet rather than a "source missing"
+  warning. `hintdb` includes the file whenever it exists, parsed as
+  history: its comment is searched as a history comment (weight 1.5), it
+  merges with the row of the same shape, and the row is labelled "your
+  history xN"; the answer adds 1 to the use count (a tie-breaker only;
+  accepted). `hintdb sources` lists it on a line of its own, marked as
+  built in; `hintdb stats` and `hint history --show` name it like any
+  source. It is part of the fingerprint, so the next lookup rebuilds. No
+  cleaning, shape or note rule changes, so no schema bump.
+- **Limits:** it helps only when a similar question is asked again; the
+  first miss is still a miss. A command typed over several lines is one
+  line in the history file with bash's defaults (`cmdhist` on: a loop is
+  joined with `;`, a `\` continuation is joined too; checked with bash
+  5.3). Only with `shopt -s lithist` is it written as several lines, so
+  the last line may be a fragment (`done`); the prompt shows it, to be
+  fixed there or cancelled. The index has the same limit.
+- **Tests** point `HINTDB_ANSWERS`, `HINTDB_LOG`, `HISTFILE` and the index
+  into the scratch directory, like the other checks.
 
 ## Known limitations
 

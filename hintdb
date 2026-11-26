@@ -25,10 +25,18 @@ DB, because dedup is global across sources.
                                                      WORDs (--printed: past commands)
   hintdb log --show N                                the full entry number N
   hintdb log --delete N[,N|N-M]...                   delete entries from the log
+  hintdb answer [TOOL]                               the last question and the
+                                                     command that answers it
+                                                     (used by hint answer)
+  hintdb answer --save -q QUESTION -- COMMAND        save an answer
 
 Query log: each `find` from the command line appends one JSON line (time,
 question, guesses, printed lines, each printed row's source files) to
 ~/.local/share/hintdb/queries.jsonl, or HINTDB_LOG (/dev/null turns it off).
+
+Answers: `hint answer` appends `COMMAND  # QUESTION` lines to
+~/.local/share/hintdb/answers, or HINTDB_ANSWERS (/dev/null turns it off).
+The file is a built-in source, read as history, whenever it exists.
 
 Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
 separate man.db, rebuilt only when man-db's index changes; used for the summary
@@ -55,6 +63,7 @@ XDG_CONF = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 DB = os.environ.get("HINTDB_DB", os.path.join(XDG_DATA, "hintdb", "hint.db"))
 SOURCES = os.environ.get("HINTDB_SOURCES", os.path.join(XDG_CONF, "hintdb", "sources"))
 LOG = os.environ.get("HINTDB_LOG", os.path.join(XDG_DATA, "hintdb", "queries.jsonl"))
+ANSWERS = os.environ.get("HINTDB_ANSWERS", os.path.join(XDG_DATA, "hintdb", "answers"))
 
 KINDS = ("history", "md", "text", "just", "make", "git", "alias")
 NOTE_EXT = {".md": "md", ".markdown": "md", ".txt": "text", ".just": "just",
@@ -911,9 +920,18 @@ def build_man():
     return len(pages)
 
 
+def all_files(srcs):
+    """The registered sources' files plus the built-in answers file, when it
+    exists (read as history)."""
+    files = expand(srcs)
+    if os.path.isfile(ANSWERS) and not any(p == ANSWERS for _, p in files):
+        files.append(("history", ANSWERS))
+    return files
+
+
 def update(force=False):
     """Rebuild whichever index is stale. Returns (entries, pages); None = unchanged."""
-    files = expand(load_sources())
+    files = all_files(load_sources())
     n = m = None
     if force or stored_fingerprint(DB) != fingerprint(files):
         n = build(files)
@@ -1583,6 +1601,121 @@ def log_show(n):
         return out if printed else out + ["  (nothing found)"]
     return None
 
+# ---------------------------------------------------------------- answers
+
+HOUSEKEEPING = {"history", "fc"}
+
+
+def live_history():
+    """The history file bash is writing now: $HISTFILE if exported, else
+    ~/.bash_history. Never chosen from the sources (other histories there
+    are for reference)."""
+    return os.environ.get("HISTFILE") or os.path.expanduser("~/.bash_history")
+
+
+def spaced_ops(cmd):
+    """Spaces around unquoted runs of `;`, `|` and `&`, so `history -a;hint`
+    splits into its commands (the index's tokens keep `-a;` whole)."""
+    out, sq, dq, esc, i = [], False, False, False, 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if esc:
+            esc = False
+        elif ch == "\\" and not sq:
+            esc = True
+        elif ch == "'" and not dq:
+            sq = not sq
+        elif ch == '"' and not sq:
+            dq = not dq
+        elif ch in ";|&" and not sq and not dq:
+            j = i
+            while j < len(cmd) and cmd[j] in ";|&":
+                j += 1
+            out.append(f" {cmd[i:j]} ")
+            i = j
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def line_tools(cmd):
+    """The command words of a line, each pipeline or list stage's (sudo,
+    env and the like skipped, paths dropped): `sudo /usr/sbin/ss -l | grep x`
+    -> ["ss", "grep"]."""
+    return [os.path.basename(w) for w in split_cmd(norm(spaced_ops(cmd)))[0].split()]
+
+
+def answer_candidate(tool=""):
+    """((last lookup, command), None) or (None, error message).
+    The command is the newest line of the live history that answers it:
+    with TOOL, the newest line where any command is TOOL; without, the
+    newest line that is not trivial and not only history housekeeping.
+    Lines that run hint are always skipped (the `hint answer` line itself)."""
+    if ANSWERS == os.devnull:
+        return None, "answers are off (HINTDB_ANSWERS=/dev/null)"
+    recs = read_log()
+    if not recs:
+        return None, "no question to answer yet: ask one with hint first"
+    rec = recs[-1]
+    hist = live_history()
+    try:
+        mtime = os.stat(hist).st_mtime
+        lines = list(read_lines(hist))
+    except OSError:
+        return None, (f"cannot read your history file {tilde(hist)}; "
+                      "if it is elsewhere, export HISTFILE in ~/.bashrc")
+    try:
+        asked = time.mktime(time.strptime(str(rec.get("time")), "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        asked = None
+    if asked is not None and mtime < asked:
+        again = "hint answer" + (f" {tool}" if tool else "")
+        return None, (f"your history file has not been written since you asked\n"
+                      f"  \"{rec['query']}\"; run:  history -a; {again}")
+    for line in reversed(lines):
+        if re.fullmatch(r"#\d{9,11}", line):   # HISTTIMEFORMAT stamp lines
+            continue
+        cmd = split_comment(line)[0]
+        if not cmd:
+            continue
+        tools = line_tools(cmd)
+        if "hint" in tools:
+            continue
+        if tool:
+            if tool in tools:
+                return (rec, cmd), None
+        elif tools and not set(tools) <= HOUSEKEEPING and not is_trivial(norm(cmd)):
+            return (rec, cmd), None
+    what = f"no {tool} command" if tool else "no command"
+    return None, f"{what} found in {tilde(hist)}"
+
+
+def answer_save(question, cmd):
+    """Append `COMMAND  # QUESTION` to the answers file. None, or an error."""
+    question = " ".join(question.split())
+    cmd = cmd.strip()
+    if ANSWERS == os.devnull:
+        return "answers are off (HINTDB_ANSWERS=/dev/null)"
+    if not cmd or "\n" in cmd:
+        return "nothing to save: the command must be one line"
+    if not question:
+        return "nothing to save: no question"
+    data = f"{cmd}  # {question}\n".encode()
+    try:
+        d = os.path.dirname(ANSWERS)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        fd = os.open(ANSWERS, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        return f"cannot write {ANSWERS}: {e}"
+    return None
+
 # ---------------------------------------------------------------- cli
 
 
@@ -1622,6 +1755,10 @@ def main():
     lg.add_argument("-d", "--delete", metavar="N[,N|N-M]...",
                     help="delete entries (their numbers stay unused)")
     lg.add_argument("words", nargs="*")
+    an = sub.add_parser("answer")
+    an.add_argument("--save", action="store_true", help="append COMMAND  # QUESTION")
+    an.add_argument("-q", "--query", help="the question (with --save)")
+    an.add_argument("words", nargs="*", help="TOOL, or with --save the COMMAND")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
     q.add_argument("--no-update", action="store_true")
@@ -1640,11 +1777,28 @@ def main():
         else:
             srcs = [(k, sp) for k, sp in srcs if sp not in paths]
         save_sources(srcs)
-        files = expand(srcs)
+        files = all_files(srcs)
         print(f"hintdb: {build(files)} entries")
     elif args.op == "sources":
         for kind, path in load_sources():
             print(f"{kind}\t{path}")
+        if ANSWERS != os.devnull:
+            state = "" if os.path.isfile(ANSWERS) else ", no answers yet"
+            print(f"history\t{ANSWERS}\t(built in: hint answer{state})")
+    elif args.op == "answer" and args.save:
+        err = answer_save(args.query or "", " ".join(args.words))
+        if err:
+            sys.exit("hintdb: " + err)
+        print(f"hintdb: saved to {tilde(ANSWERS)}")
+    elif args.op == "answer":
+        if len(args.words) > 1:
+            sys.exit("hintdb: answer takes at most one TOOL")
+        res, err = answer_candidate(args.words[0] if args.words else "")
+        if err:
+            sys.exit("hintdb: " + err)
+        rec, cmd = res
+        print(f"{rec['n']}\t{rec['query']}")
+        print(cmd)
     elif args.op == "rebuild":
         report(update(force=True))
     elif args.op == "update":

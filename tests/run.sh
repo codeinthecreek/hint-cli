@@ -23,7 +23,7 @@ mkdir -p "$tmp/bin"
 ln -s "$root/hint" "$tmp/bin/hint"
 ln -s "$root/hintdb" "$tmp/bin/hintdb"
 # Stub tools the fixtures use, so they count as installed here.
-for t in fakedock fakedock-compose FakeVM xrandr; do
+for t in fakedock fakedock-compose FakeVM xrandr fakess; do
   printf '#!/bin/sh\n' > "$tmp/bin/$t"; chmod +x "$tmp/bin/$t"
 done
 export PATH="$tmp/bin:$PATH"
@@ -31,7 +31,7 @@ export PATH="$tmp/bin:$PATH"
 # Isolated index and sources.
 export HINTDB_DB="$tmp/hint.db" HINTDB_MANDB="$tmp/man.db"
 export HINTDB_SOURCES="$tmp/sources" HISTFILE="$fix/history"
-export HINTDB_LOG="$tmp/queries.jsonl"
+export HINTDB_LOG="$tmp/queries.jsonl" HINTDB_ANSWERS="$tmp/answers"
 export HINTDB_APROPOS="cat $fix/apropos.txt"
 unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL
 
@@ -787,6 +787,91 @@ has "search + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/
 : > "$HINTDB_LOG"
 hint short dns lookup >/dev/null 2>&1
 has "a lookup can be found again with history" "$(hint history dns 2>&1)" "short dns lookup"
+
+echo "== hint answer"
+# Its own history file and log, so the mtime check and the lines are known.
+ah="$tmp/answer-history" alog="$tmp/answer-log.jsonl" ans="$tmp/answers"
+printf '%s\n' 'du -sh /srv/current' 'sudo /usr/sbin/fakess -ltnp sport = 8080' \
+  "sudo /usr/sbin/fakess -ltnp 'sport = :8080'  # my own note" 'ps aux | grep nginx' \
+  'cd /etc' '#1700000000' 'history -a' 'history -d 12' 'history -a; hint answer' > "$ah"
+printf '%s\n' '{"time": "2026-11-01T09:00:00", "query": "older question", "printed": []}' \
+  '{"time": "2026-11-02T09:00:00", "query": "who is listening on port 8080", "printed": []}' > "$alog"
+A() { HISTFILE="$ah" HINTDB_LOG="$alog" "$@"; }
+
+out=$(A hintdb answer 2>&1)
+line "answer: the last question, with its number" "$out" 1 "$(printf '2\twho is listening on port 8080')"
+line "answer: last command, skipping hint, history housekeeping and trivial lines" "$out" 2 \
+  "ps aux | grep nginx"
+out=$(A hintdb answer fakess 2>&1)
+line "answer TOOL: newest line with that tool (sudo and path skipped), comment dropped" "$out" 2 \
+  "sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
+line "answer TOOL: any command in a pipeline counts" "$(A hintdb answer grep 2>&1)" 2 "ps aux | grep nginx"
+line "answer history: history lines found when named, the hint line still skipped" \
+  "$(A hintdb answer history 2>&1)" 2 "history -d 12"
+line "answer: a ; with no space still splits the line" \
+  "$(printf '%s\n' 'du -sh /srv/current' 'history -a;hint answer' > "$tmp/h2"; HISTFILE="$tmp/h2" HINTDB_LOG="$alog" hintdb answer 2>&1)" 2 \
+  "du -sh /srv/current"
+line "answer: a quoted ; is not a separator" \
+  "$(printf '%s\n' "fakess -x 'a;hint'" > "$tmp/h3"; HISTFILE="$tmp/h3" HINTDB_LOG="$alog" hintdb answer 2>&1)" 2 \
+  "fakess -x 'a;hint'"
+line "answer cd: trivial lines found when named" "$(A hintdb answer cd 2>&1)" 2 "cd /etc"
+out=$(A hintdb answer zzqq 2>&1)
+status "answer TOOL not in history: exit 1" 1 $?
+has "answer TOOL not in history: says so" "$out" "no zzqq command found in"
+
+out=$(HISTFILE="$tmp/no-such-history" HINTDB_LOG="$alog" hintdb answer 2>&1)
+status "answer: missing history file: exit 1" 1 $?
+has "answer: missing history file: says to export HISTFILE" "$out" "export HISTFILE"
+out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/no-such-log" hintdb answer 2>&1)
+status "answer: no question yet: exit 1" 1 $?
+has "answer: no question yet: says so" "$out" "no question to answer yet"
+printf '%s\n' '{"time": "2099-01-01T09:00:00", "query": "asked after the last write", "printed": []}' > "$tmp/future-log"
+out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/future-log" hint answer fakess 2>&1 </dev/null)
+status "answer: history not written since the question: exit 1" 1 $?
+has "answer: history not written since the question: says what to run" "$out" \
+  "run:  history -a; hint answer fakess"
+lacks "answer: history not written: no prompt" "$out" "answer to"
+out=$(HINTDB_ANSWERS=/dev/null A hintdb answer 2>&1)
+status "answer: HINTDB_ANSWERS=/dev/null turns it off" 1 $?
+has "answer: off says so" "$out" "answers are off"
+
+rm -f "$ans"
+out=$(printf '\n' | A hint answer fakess 2>&1)
+status "hint answer: empty line cancels (exit 1)" 1 $?
+has "hint answer: cancel says nothing saved" "$out" "cancelled, nothing saved"
+[ -e "$ans" ] && bad "hint answer: cancel writes no file" || ok "hint answer: cancel writes no file"
+out=$(A hint answer fakess 2>&1 <<<"sudo fakess -ltnp 'sport = :8080'")
+status "hint answer: edited line saved (exit 0)" 0 $?
+has "hint answer: prompt shows the question" "$out" 'answer to 2 "who is listening on port 8080":'
+has "hint answer: prompt shows the command" "$out" "> sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
+has "hint answer: says where it was saved" "$out" "saved to"
+line "hint answer: the line as edited, with the question as its comment" "$(cat "$ans")" 1 \
+  "sudo fakess -ltnp 'sport = :8080'  # who is listening on port 8080"
+has "hint answer: file mode 600" "$(stat -c %a "$ans")" "600"
+printf '%s\n' '{"time": "2026-11-03T09:00:00", "query": "space used by the current release", "printed": []}' >> "$alog"
+A hint answer du >/dev/null 2>&1 <<<"du -sh /srv/current"
+has "hint answer: answers are appended" "$(wc -l <"$ans")" "2"
+line "hint answer: each answer goes with the last question" "$(cat "$ans")" 2 \
+  "du -sh /srv/current  # space used by the current release"
+
+out=$(hint answer -x 2>&1)
+status "hint answer -x: usage, exit 2" 2 $?
+printf '%s\n' 'yes | fakedock prune' > "$reply"
+hint answer yes to all prompts >/dev/null 2>&1
+has "answer + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "answer yes to all prompts"
+
+# In the index: built in, read as history, merged with the row of the same shape.
+has "sources: answers file listed as built in" "$(hintdb sources)" "$ans	(built in: hint answer)"
+has "sources: no answers yet" "$(HINTDB_ANSWERS="$tmp/none" hintdb sources)" "no answers yet"
+lacks "sources: answers off: not listed" "$(HINTDB_ANSWERS=/dev/null hintdb sources)" "built in"
+out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "space used by the current release" "df -h" 2>/dev/null)
+line "answered row found by the question's words" "$out" 1 "du -sh /srv/current"
+line "answered row: merged with the history row, the question as its note" "$out" 2 \
+  "  # your history x2: space used by the current release"
+out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "who is listening on port 8080" "netstat -tulpn" 2>/dev/null)
+has "answered command found despite the wrong guessed tool" "$out" "sudo fakess -ltnp 'sport = :8080'"
+has "answered command not on PATH is kept (it has a note)" "$out" "# your history x1: who is listening on port 8080"
 
 echo
 echo "$pass passed, $fail failed"
