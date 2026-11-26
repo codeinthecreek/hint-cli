@@ -939,6 +939,160 @@ Agreed and built 2026-11-26.
   `# WRONG: reason`, and the near misses above), a copy of the command in
   a notes file and another history file, `hintdb stats`, `hint forget`.
 
+## Flags
+
+Proposed 2026-11-26, not built.
+
+- **Purpose:** hint often finds the right tool in the wrong form. For "how
+  do I connect to port 4567" the model gave `nc -l 4567`, and `-l`
+  listens rather than connects. `hint flags` says what each flag in a
+  command does, from the tool's own documentation, so a suggestion can be
+  checked before it is run. A wrong command that gets run goes into
+  history and comes back (see WRONG marker).
+- **Form:** `hint flags COMMAND...`, with the command as words, or quoted
+  when it has a pipe or `;`, so the shell doesn't act on them:
+  `hint flags nc -l 4567`, `hint flags 'sudo lsof -i -P -n | grep LISTEN'`.
+  Each command in a pipeline or list is explained in turn. Wrappers
+  (`sudo`, `env`, `time`, and so on, the same list the index uses) are
+  skipped, so the tool after them is explained.
+- **Where the text comes from:** no model call. A 3b model explaining
+  flags makes the same kind of mistake the command is checked for.
+  - a bash builtin (`history`, `read`, `cd`): `help TOOL`. `hint flags
+    history -n 10` shows `-n  read all history lines not already read from
+    the history file`, which takes no count;
+  - otherwise the man page, rendered as plain ASCII (`LC_ALL=C`,
+    `MANWIDTH=80`, `col -b`). A subcommand's own page is tried first:
+    `git commit -a` reads `git-commit(1)`, then `git(1)`;
+  - never `TOOL --help`: it runs the program that is being checked.
+- **Finding a flag:** a line whose text starts with the flag, followed by
+  the end of the line, a space, a tab, `,`, `=` or `[`. This covers both
+  layouts: GNU (`-l, --listening` with the description on the next lines)
+  and BSD (`-l` and the description after a tab). The entry is that line
+  and the lines after it, up to a blank line or a line indented no more
+  than the flag's line. It is cut after 4 lines, with `...`.
+  - `--name=value` is looked up as `--name`;
+  - `-tuln` that is not in the page itself is looked up as `-t -u -l -n`;
+  - words that are not flags (`4567`, file names) are not listed.
+- **Output:** one entry per flag, in the order typed, each with the flag
+  line as the page writes it (so the long name shows too), and the
+  descriptions lined up so a split group reads as one table. Text from the
+  real ss(8) page:
+
+  ```
+  $ hint flags ss -tuln
+  ss -t, --tcp        Display TCP sockets.
+  ss -u, --udp        Display UDP sockets.
+  ss -l, --listening  Display only listening sockets (these are omitted by
+                      default).
+  ss -n, --numeric    Do not try to resolve service names. Show exact
+                      bandwidth values, instead of human-readable values.
+  ```
+
+  In a pipeline each command is a group; a command with no flags
+  (`grep LISTEN`) is printed with nothing under it, so it is clear it was
+  not skipped. A flag not found says so: `-x: not in nc(1)`. A tool with
+  no page: `kubectl: no man page or builtin help here`. Nothing is
+  guessed.
+- **Not part of a lookup:** it reads no index, writes no query log entry,
+  and does not change plain `hint` output.
+- **Not taken:**
+  - explaining the flags of every printed line in normal output: too
+    noisy for a list of six suggestions;
+  - `hint flags N` for line N of the last lookup's output: hint's output
+    is not numbered, and a numbered form was found confusing for forget;
+  - asking the model, or running `--help` (above).
+- **Limits:** pages with an unusual layout; tools with no page (`kubectl`
+  has `--help` only); a flag whose description lists several flags on one
+  line is found only by the first.
+- **Tests:** fake man and help output (a GNU page, a BSD page, a builtin,
+  a subcommand page), grouped flags, `--name=value`, a pipeline quoted as
+  one word, `sudo`, a missing flag and a missing page.
+
+## Man
+
+Proposed 2026-11-26, not built.
+
+- **Purpose:** hint usually finds the right tool, often in the wrong form
+  (`nc -l 4567` to connect to a port). `hint man` is the follow-up the user
+  asks for once the tool is known: search that tool's documentation for
+  the task and show the forms it gives. It is never run by a lookup by
+  itself; plain `hint` output is unchanged.
+- **Form:** `hint man TOOL WORDS...`, no quotes needed:
+  `hint man nc connect to port`. When the second word names a subcommand
+  page, that page is read first: `hint man git commit amend` reads
+  git-commit(1), then git(1).
+- **Sources,** for that tool only, read the same way as `hint flags` (and
+  with the same code):
+  - its tldr page, when tldr pages are installed (see below): each example
+    is a passage, its description plus its command;
+  - its man page's example section, headed `EXAMPLES`, `EXAMPLE` or
+    `USAGE EXAMPLES`: each description plus its command. Both layouts
+    occur: description first with the indented `$ command` below (nc(1)),
+    or the command first with the description indented below (ss(8));
+  - its option entries in the man page, or `help TOOL` for a builtin, as
+    `hint flags` finds them: each entry is a passage, shown as the form
+    `TOOL -FLAG` with the entry's first line as its note.
+- **Ranking:** no model call and no index. The passages go into an
+  in-memory SQLite FTS5 table (porter stemming, as the index uses, so
+  "connect" matches "connection"), and the words are searched with bm25,
+  with hint's stop words dropped ("how do I"). Examples (tldr and man)
+  rank before option entries: a matching example is a whole form, an
+  option entry is a piece of one, and an entry that mentions the task's
+  words may mean the opposite (nc's `-l` says "rather than initiating a
+  connection"). Its note is what lets the user see that. Up to 5 hits are
+  shown.
+- **Output,** one hit per form with where it came from, like a lookup.
+  A sketch from the real nc(1) and tldr pages:
+
+  ```
+  $ hint man nc connect to port
+  nc host port >received_filename
+    # tldr: Connect to a target listener on the specified port and receive a file from it
+  nc -u host.example.com 53
+    # man nc(1) example: Open a UDP connection to port 53 of host.example.com
+  nc -l
+    # man nc(1) -l: Listen for an incoming connection rather than initiating a connection ...
+  ```
+
+  A form put together from several flags is not made up: `hint man ss
+  list listening ports` gives `ss -lt src :8080` (tldr) and `ss -l`
+  (option entry), not `ss -tuln`. That form came from the user's history,
+  which is what plain `hint` is for, and `hint flags ss -tuln` checks it.
+- **tldr placeholders:** a tldr command must not be runnable as printed.
+  - `{{host}}` is printed as `host`;
+  - `{{[-lt|--listening --tcp]}}` (the short and long spelling of the
+    same option) as the short one, `-lt`;
+  - a choice, `{{--tcp|--udp|--raw|--unix}}`, as
+    `<--tcp|--udp|--raw|--unix>`: printed bare, `|` would make it a
+    pipeline; with `<` it fails harmlessly as a redirect if pasted.
+- **tldr is optional.** The pages are read from a client's local cache,
+  never fetched: tealdeer's (`~/.cache/tealdeer/tldr-pages`, the one
+  checked here), then the other clients' usual places, or a directory
+  given in `HINTDB_TLDR` (also for tests). Pages in `common` and `linux`,
+  English. Without them `hint man` searches the man page and help only.
+  - **Suggesting it:** when no cache is found and no example matched, the
+    output ends with one line: `# no tldr pages here: install tealdeer
+    (or another tldr client) and run tldr --update for more forms`. It is
+    only shown when the result is thin, which is when tldr would help;
+    no state is kept about having said it before, and on a server
+    without tldr where a man example matched, nothing is said.
+- **Not taken:**
+  - indexing tldr as a lookup source: about 12000 rows for the tools
+    installed here (1593 tools with a page), far more than the user's
+    history, with a risk of pushing good rows down. Parked until
+    `hint man` shows that searching across tools is needed;
+  - `hint tldr TOOL`: a tldr page has at most 8 examples, and `tldr TOOL`
+    already shows them;
+  - one command for both `man` and `flags`: `hint man nc -l` would be
+    ambiguous between explaining `-l` and searching for it.
+- **Limits:** a man page without an example section gives only option
+  entries; layouts other than the two above; tools with neither a man
+  page nor a tldr page.
+- **Tests:** fake man pages (both example layouts, `USAGE EXAMPLES`), a fake
+  tldr directory (placeholders of each kind), a builtin, the ranking of
+  an example above an option entry, the thin-result note with and without
+  a tldr cache.
+
 ## Known limitations
 
 Listed in README.md under "Limitations". Each is addressed only when a real
