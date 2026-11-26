@@ -25,10 +25,10 @@ DB, because dedup is global across sources.
                                                      WORDs (--printed: past commands)
   hintdb log --show N                                the full entry number N
   hintdb log --delete N[,N|N-M]...                   delete entries from the log
-  hintdb answer [TOOL]                               the last question and the
+  hintdb remember [TOOL]                             the last question and the
                                                      command that answers it
-                                                     (used by hint answer)
-  hintdb answer --save -q QUESTION -- COMMAND        save an answer
+                                                     (used by hint remember)
+  hintdb remember --save -q QUESTION -- COMMAND      save an answer
   hintdb forget [TOOL]                               your last command (or last
                                                      TOOL command), for hint forget
   hintdb forget --where -- COMMAND                   the files and lines holding
@@ -38,7 +38,7 @@ Query log: each `find` from the command line appends one JSON line (time,
 question, guesses, printed lines, each printed row's source files) to
 ~/.local/share/hintdb/queries.jsonl, or HINTDB_LOG (/dev/null turns it off).
 
-Answers: `hint answer` appends `COMMAND  # QUESTION` lines to
+Answers: `hint remember` appends `COMMAND  # QUESTION` lines to
 ~/.local/share/hintdb/answers, or HINTDB_ANSWERS (/dev/null turns it off).
 The file is a built-in source, read as history, whenever it exists.
 
@@ -1667,11 +1667,11 @@ def question_line(lines, query):
     return None
 
 
-def pick_line(tool="", verb="answer"):
+def pick_line(tool="", verb="remember"):
     """((last lookup or None, command, anchored), None) or (None, error).
     When the last question is found in the live history, only the lines after
     it count, and the pick is the first of them for forget (the suggestion
-    tried right after asking) and the last for answer (the one that finally
+    tried right after asking) and the last for remember (the one that finally
     worked): with TOOL the first/last line where any command is TOOL,
     without it the first/last line that is not trivial. Lines that run hint
     are always skipped. When the question is not in the file (asked in
@@ -1699,7 +1699,7 @@ def pick_line(tool="", verb="answer"):
     anchored = start is not None
     if anchored:
         span = lines[start + 1:]
-        if verb == "answer":
+        if verb == "remember":
             span = span[::-1]
     else:
         span = lines[::-1]
@@ -1724,13 +1724,13 @@ def pick_line(tool="", verb="answer"):
     if anchored and not tool and skipped:
         # Say what was skipped and how to take each: name its tool. Per
         # tool, the line `hint VERB TOOL` takes (skipped is in pick order:
-        # newest first for answer, oldest first for forget); listed in the
+        # newest first for remember, oldest first for forget); listed in the
         # file's order.
         picks = {}
         for c in skipped:
             picks.setdefault(line_tools(c)[0], c)
         rows = sorted(picks.items(), key=lambda kv: skipped.index(kv[1]),
-                      reverse=(verb == "answer"))[-5:]
+                      reverse=(verb == "remember"))[-5:]
         width = max(len(c) for _, c in rows)
         return None, (f"only trivial commands since you asked \"{rec['query']}\";\n"
                       "to take one, name its tool:\n"
@@ -1750,14 +1750,14 @@ def print_pick(res):
     print(cmd)
 
 
-def answer_candidate(tool=""):
+def remember_candidate(tool=""):
     """((last lookup, command), None) or (None, error message): the last
     question and the line that answers it (see pick_line)."""
     if ANSWERS == os.devnull:
         return None, "answers are off (HINTDB_ANSWERS=/dev/null)"
     if not read_log():
         return None, "no question to answer yet: ask one with hint first"
-    return pick_line(tool, "answer")
+    return pick_line(tool, "remember")
 
 
 FORGET_STEPS = """\
@@ -1817,7 +1817,7 @@ def forget_report(cmd):
     return out
 
 
-def answer_save(question, cmd):
+def remember_save(question, cmd):
     """Append `COMMAND  # QUESTION` to the answers file. None, or an error."""
     question = " ".join(question.split())
     cmd = cmd.strip()
@@ -1881,7 +1881,7 @@ def main():
     lg.add_argument("-d", "--delete", metavar="N[,N|N-M]...",
                     help="delete entries (their numbers stay unused)")
     lg.add_argument("words", nargs="*")
-    an = sub.add_parser("answer")
+    an = sub.add_parser("remember")
     an.add_argument("--save", action="store_true", help="append COMMAND  # QUESTION")
     an.add_argument("-q", "--query", help="the question (with --save)")
     an.add_argument("words", nargs="*", help="TOOL, or with --save the COMMAND")
@@ -1914,9 +1914,9 @@ def main():
             print(f"{kind}\t{path}")
         if ANSWERS != os.devnull:
             state = "" if os.path.isfile(ANSWERS) else ", no answers yet"
-            print(f"history\t{ANSWERS}\t(built in: hint answer{state})")
-    elif args.op == "answer" and args.save:
-        err = answer_save(args.query or "", " ".join(args.words))
+            print(f"history\t{ANSWERS}\t(built in: hint remember{state})")
+    elif args.op == "remember" and args.save:
+        err = remember_save(args.query or "", " ".join(args.words))
         if err:
             sys.exit("hintdb: " + err)
         print(f"hintdb: saved to {tilde(ANSWERS)}")
@@ -1933,10 +1933,10 @@ def main():
         if err:
             sys.exit("hintdb: " + err)
         print_pick(res)
-    elif args.op == "answer":
+    elif args.op == "remember":
         if len(args.words) > 1:
-            sys.exit("hintdb: answer takes at most one TOOL")
-        res, err = answer_candidate(args.words[0] if args.words else "")
+            sys.exit("hintdb: remember takes at most one TOOL")
+        res, err = remember_candidate(args.words[0] if args.words else "")
         if err:
             sys.exit("hintdb: " + err)
         print_pick(res)

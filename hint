@@ -4,7 +4,7 @@
 #   hint how do I create an ssh tunnel
 #   hint history tunnel        past questions containing "tunnel"
 #   hint search ssh            past answers containing "ssh"
-#   hint answer [TOOL]         save the command that answered the last question
+#   hint remember [TOOL]         save the command that answered the last question
 #   hint forget [TOOL]         where a wrong command is, to delete it
 #
 # 1. An LLM (Ollama chat API) guesses 1-3 commands for the request.
@@ -33,7 +33,7 @@ usage: hint <what you want to do>
                                        with WORD, or the last N
        hint search [OPTIONS] WORD      past commands containing WORD
        hint history --show NUM         the full answer of past question NUM
-       hint answer [TOOL]              save your last command (or your last
+       hint remember [TOOL]            save your last command (or your last
                                        TOOL command) as the answer to the
                                        last question, after you confirm it
        hint forget [TOOL]              list where your last command (or your
@@ -169,19 +169,19 @@ not_found_note() {
   echo "  (your last question is not in your history file: this is your newest command)" >&2
 }
 
-# answer [TOOL]   save the last command (or the last TOOL command) in the
+# remember [TOOL]   save the last command (or the last TOOL command) in the
 # history file as the answer to the last question, after the user confirms
 # or edits it. hintdb picks both; nothing is saved without the prompt.
-answer() {
+remember() {
   local cand n q where cmd line
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
-  cand=$(hintdb answer -- "$@") || exit 1
+  cand=$(hintdb remember -- "$@") || exit 1
   { IFS=$'\t' read -r n q where; IFS= read -r cmd; } <<<"$cand"
-  printf 'answer to %s "%s":\n' "$n" "$q" >&2
+  printf 'remember as the answer to %s "%s":\n' "$n" "$q" >&2
   [ "$where" = after ] || not_found_note
-  keys_help "Enter saves" answer $#
+  keys_help "Enter saves" remember $#
   edit_line "$cmd" saved
-  hintdb answer --save -q "$q" -- "$line"
+  hintdb remember --save -q "$q" -- "$line"
 }
 
 # forget [TOOL]   list the files and line numbers holding the last command
@@ -223,9 +223,9 @@ case "$1" in
       esac
     done
     [ "$plain" -le 1 ] && past "$1" word "${@:2}" ;;
-  # answer or forget alone or with one TOOL. Two or more words: a question
-  # ("answer yes to all prompts", "forget a wifi network").
-  answer|forget)
+  # remember or forget alone or with one TOOL. Two or more words: a question
+  # ("remember my ssh key passphrase", "forget a wifi network").
+  remember|forget)
     if [ $# -le 2 ]; then
       case "${2:-}" in -?*) usage ;; esac
       op=$1; shift; "$op" "$@"; exit $?

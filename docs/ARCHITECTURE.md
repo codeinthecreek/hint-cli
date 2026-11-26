@@ -94,7 +94,7 @@ index (`hint.db`).
 | justfiles, Makefiles | single-command recipe lines | `just <recipe>` / `make <target>` and the doc comment |
 | git aliases | `git <alias>` | the comment above, the section heading, the body |
 | bash aliases | the alias name | the comment above the block, the body |
-| answers (`hint answer`) | every line | the question it answered |
+| answers (`hint remember`) | every line | the question it answered |
 
 **What is dropped:** trivial commands (`ls`, `cd`, `vim file`, ...) unless they
 carry a note, lines that look like secrets, `hint` and `hintdb` themselves, and
@@ -198,9 +198,9 @@ The question, the guesses and the printed lines are added to a local query
 log (`queries.jsonl`), which `hint history` and `hint search` read without
 asking the model.
 
-### Answers
+### Remember
 
-When a lookup missed, `hint answer` takes the last question from the log and
+When a lookup missed, `hint remember` takes the last question from the log and
 your last command from your history file, and after you confirm it appends
 `command  # question` to the answers file. That file is read like history,
 so the question becomes a comment on your command's row, and the next
@@ -277,4 +277,4 @@ ranks the index for the words alone, without asking the model.
 | `~/.local/share/hintdb/hint.db` | the index of your commands |
 | `~/.local/share/hintdb/man.db` | man page summaries |
 | `~/.local/share/hintdb/queries.jsonl` | the query log |
-| `~/.local/share/hintdb/answers` | answers saved by `hint answer` |
+| `~/.local/share/hintdb/answers` | answers saved by `hint remember` |

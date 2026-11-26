@@ -164,7 +164,7 @@ If hint missed and you found the command some other way, run it, then tell
 hint it was the answer:
 
 ```bash
-hint answer
+hint remember
 ```
 
 hint shows your last question and the last command you ran after it, on a
@@ -177,15 +177,15 @@ takes the last line since your question that runs `ss`, also inside a
 pipeline:
 
 ```bash
-hint answer ss
+hint remember ss
 ```
 
-`hint answer` reads your history file, so the command has to be written to
+`hint remember` reads your history file, so the command has to be written to
 it first. With `history -a` in `PROMPT_COMMAND` (see Install) it always is.
 Without it, for example on a server, write it first:
 
 ```bash
-history -a; hint answer
+history -a; hint remember
 ```
 
 Answers are kept in `~/.local/share/hintdb/answers`, one `command  #
@@ -272,8 +272,8 @@ hint -H ssh key
 | `HINTDB_SOURCES` | `~/.config/hintdb/sources` | list of sources |
 | `HINTDB_APROPOS` | `apropos .` | command that lists man page summaries (for testing) |
 | `HINTDB_LOG` | `~/.local/share/hintdb/queries.jsonl` | query log; `/dev/null` turns it off |
-| `HINTDB_ANSWERS` | `~/.local/share/hintdb/answers` | answers saved by `hint answer`; `/dev/null` turns them off |
-| `HISTFILE` | `~/.bash_history` | the history `hint answer` reads; export it if yours is elsewhere |
+| `HINTDB_ANSWERS` | `~/.local/share/hintdb/answers` | answers saved by `hint remember`; `/dev/null` turns them off |
+| `HISTFILE` | `~/.bash_history` | the history `hint remember` reads; export it if yours is elsewhere |
 
 The query log stays on your machine, like your shell history, and contains
 commands from it.
@@ -321,7 +321,7 @@ prints the usage; `hint help me ...` is a question.
 | `hintdb stats --source PATH` | the rows from one source file or directory, most used first |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
 | `hintdb log ...` | read and edit the query log (used by `hint history` and `hint search`) |
-| `hintdb answer [TOOL]` | the last question and the command that answers it (used by `hint answer`) |
+| `hintdb remember [TOOL]` | the last question and the command that answers it (used by `hint remember`) |
 | `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND (used by `hint forget`) |
 | `hintdb query [-n N] WORDS...` | the search for the words alone, with scores (debugging) |
 

@@ -418,7 +418,7 @@ other words, so the limitation stays (README).
 ## Index
 
 - **Sources:** bash history, markdown and text notes, justfiles, Makefiles,
-  git and bash aliases, and the built-in answers file (see Answers). Man NAME lines (sections 1 and 8, from `apropos .`)
+  git and bash aliases, and the built-in answers file (see Remember). Man NAME lines (sections 1 and 8, from `apropos .`)
   go into a separate `man.db`. Direction agreed 2026-11-18: notes only when
   targeted (such as a Kubernetes cheatsheet), not folders of old notes from
   another platform; add recipe files, git aliases and bash aliases (done).
@@ -516,7 +516,7 @@ other words, so the limitation stays (README).
 
 - **Purpose:** a record of real lookups, for looking up past answers
   (`hint history`, `hint search`), per-source usage, and the question that
-  `hint answer` answers (see Answers).
+  `hint remember` answers (see Remember).
 - **Written by `hintdb find`** from the command line, after the answer is
   printed, one JSON line per lookup: `time` (local, ISO), `query`,
   `guesses` (as passed), `printed` (the lines exactly as shown) and `rows`
@@ -583,12 +583,15 @@ other words, so the limitation stays (README).
 - **Private:** like shell history it holds the user's commands; it stays
   local and is never committed. Tests point it into their scratch directory.
 
-## Answers
+## Remember
 
-Agreed and built 2026-11-26.
+Agreed and built 2026-11-26. Named `hint answer` at first; renamed the
+same day to `hint remember`, which pairs with `hint forget` and says what
+it does (user). The file and `HINTDB_ANSWERS` keep their name: they hold
+answers to questions.
 
 - **Purpose:** when a lookup missed and the user found the command some
-  other way, `hint answer` saves the question as a comment on that
+  other way, `hint remember` saves the question as a comment on that
   command, so the next similar question finds it. A wrong tool guess was
   behind most misses (26 of 30, 2026-11-18); with the question's words on
   the user's row, the row is found even when the model guesses the same
@@ -604,11 +607,11 @@ Agreed and built 2026-11-26.
   lookup was rejected: a mistyped flag would be remembered, and with
   several terminals writing to one history file the lines after a lookup
   may come from another terminal.
-- **Form:** `hint answer [TOOL]`. Same rule as `history` and `search`: a
+- **Form:** `hint remember [TOOL]`. Same rule as `history` and `search`: a
   command when at most one plain word follows, a question with two or
-  more (`hint answer yes to all prompts` is a question).
+  more (`hint remember my ssh key passphrase` is a question).
 - **Usual sequence:** `hint QUESTION`, then the user tries commands until
-  one works, then `hint answer`. The user is not expected to do other work
+  one works, then `hint remember`. The user is not expected to do other work
   in between, so the answer is taken to belong to the last lookup.
 - **The question:** the last lookup in the query log, as hint received it.
   It is shown at the prompt, so a lookup made from another terminal in the
@@ -623,9 +626,9 @@ Agreed and built 2026-11-26.
 - **Not written yet:** a script cannot read the shell's history in memory,
   only the file. If the file was last modified before the last lookup's
   time, the commands run since are not in it; hint says so, suggests
-  `history -a; hint answer`, and exits 1 without a prompt. With `history
+  `history -a; hint remember`, and exits 1 without a prompt. With `history
   -a` in `PROMPT_COMMAND` (the README's setup) the file is always current.
-  Without it (servers), the documented form is `history -a; hint answer`,
+  Without it (servers), the documented form is `history -a; hint remember`,
   not an alias: an alias line would itself be taken as the last command.
   The check can miss: if another shell writes the file (e.g. on exit)
   between the lookup and the answer, the file is newer but this session's
@@ -636,40 +639,40 @@ Agreed and built 2026-11-26.
   index does (`|`, `;`, `&&`, `||`; `sudo`, `env` and the like skipped; a
   command's path dropped, so `/usr/sbin/ss` is `ss`), except that an
   unquoted `;`, `|` or `&` also separates when it touches a word: the
-  index's tokens keep `-a;` whole, so `history -a;hint answer` was not
+  index's tokens keep `-a;` whole, so `history -a;hint remember` was not
   seen as running `hint` (found by the tests). The index is unchanged.
   - **After the question** (changed 2026-11-26, from real use): only the
     lines after the question's own `hint` line count. The question is the
     last line whose words, split as the shell does (`shlex`), are `hint`
     followed by the logged question (hint logs `"$*"`, so quotes and
-    spacing do not matter). `hint answer` takes the **last** of those lines
+    spacing do not matter). `hint remember` takes the **last** of those lines
     (what finally worked), `hint forget` the **first** (the suggestion run
     right after asking). Nothing run since the question: says so, exit 1;
     lines from before the question are never offered.
     Why: the first version took the newest line anywhere, skipping
-    `history`/`fc` lines (so the `history -a` typed before `hint answer`
+    `history`/`fc` lines (so the `history -a` typed before `hint remember`
     was not taken). In real use, after `hint show me the last history
     items`, `history -n 10` (wrong), `man history`, `history --help`, plain
     `hint forget` skipped every history line and offered `docker stop ...`
     from before the question, and `hint forget history` offered `history
     --help`. Matching the question's line was first rejected as fragile;
     splitting it as the shell does makes it reliable.
-  - Always skipped: lines that run `hint` (the `hint answer` line itself,
+  - Always skipped: lines that run `hint` (the `hint remember` line itself,
     in case `history -a` wrote it; not checked on a real terminal), and,
     without TOOL, trivial lines by the index's rule (`cd /etc`, `man
     history`). History and `fc` lines count: `history -n 10` and `fc -ln
     -10` are lines one forgets or answers with, and the `history -a` before
-    `hint answer` is on the same line as hint or comes after the answer.
+    `hint remember` is on the same line as hint or comes after the answer.
     When only trivial lines follow the question, the message lists them,
-    each with the command that takes it (`history 10   hint answer
+    each with the command that takes it (`history 10   hint remember
     history`): in real use the answer was `history 10`, followed by `vim
     ~/.bash_history`, and "no command since you asked" did not say why
     (2026-11-26). The rule stays: without it `vim ~/.bash_history` would
     have been offered.
   - With TOOL: the last (answer) or first (forget) line after the question
     in which any command is TOOL, with nothing else skipped: naming the
-    tool means that tool is wanted, so `hint answer history` finds
-    `history -d 1234` and `hint answer grep` finds `ps aux | grep nginx`.
+    tool means that tool is wanted, so `hint remember history` finds
+    `history -d 1234` and `hint remember grep` finds `ps aux | grep nginx`.
   - **Question not in the file** (asked in another terminal, or quotes
     `shlex` cannot split): the newest line anywhere, skipping also lines
     made only of `history` and `fc` commands, as in the first version. The
@@ -678,7 +681,7 @@ Agreed and built 2026-11-26.
   -i` from the terminal), so a typo or a one-off value can be fixed before
   saving. Enter saves, Ctrl-C or an empty line cancels. A line under the
   question says so, and how to reach another line: edit it, or (when no
-  TOOL was given) `hint answer TOOL` (user, 2026-11-26). `hint forget`
+  TOOL was given) `hint remember TOOL` (user, 2026-11-26). `hint forget`
   says the same, with "Enter lists where it is".
 - **Saved:** the whole line as edited, not only the TOOL part, so it has
   the shape of the user's existing row and merges with it. One line
@@ -728,9 +731,9 @@ Agreed and built 2026-11-26.
     generated pattern must escape every special character correctly.
   Fixing the source also cleans bash's own history, which the other
   options would not.
-- **Form:** `hint forget [TOOL]`, parsed like `hint answer`: a command when
+- **Form:** `hint forget [TOOL]`, parsed like `hint remember`: a command when
   at most one plain word follows, a question with two or more.
-- **Picking the line:** as for `hint answer` (see "Which line"), but the
+- **Picking the line:** as for `hint remember` (see "Which line"), but the
   **first** line after the last question, or the first TOOL line: the
   suggestion that looked right and was run right after asking. Also the
   check that the history file was written since the last lookup, when there
@@ -756,7 +759,7 @@ Agreed and built 2026-11-26.
   `hint forget` works on one exact command; other lines of the same shape
   stay and are listed only if they are that command.
 - **Bash steps, only when the live history is one of the files** (the
-  history file bash is writing, as for `hint answer`). Editing that file
+  history file bash is writing, as for `hint remember`). Editing that file
   while terminals are open needs care, so the steps are printed after the
   file list; for any other file the line numbers are enough:
 

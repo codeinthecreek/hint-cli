@@ -788,95 +788,95 @@ has "search + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/
 hint short dns lookup >/dev/null 2>&1
 has "a lookup can be found again with history" "$(hint history dns 2>&1)" "short dns lookup"
 
-echo "== hint answer"
+echo "== hint remember"
 # Its own history file and log, so the mtime check and the lines are known.
 ah="$tmp/answer-history" alog="$tmp/answer-log.jsonl" ans="$tmp/answers"
 printf '%s\n' 'du -sh /srv/current' 'sudo /usr/sbin/fakess -ltnp sport = 8080' \
   "sudo /usr/sbin/fakess -ltnp 'sport = :8080'  # my own note" 'ps aux | grep nginx' \
-  'cd /etc' '#1700000000' 'history -a' 'history -d 12' 'history -a; hint answer' > "$ah"
+  'cd /etc' '#1700000000' 'history -a' 'history -d 12' 'history -a; hint remember' > "$ah"
 printf '%s\n' '{"time": "2026-11-01T09:00:00", "query": "older question", "printed": []}' \
   '{"time": "2026-11-02T09:00:00", "query": "who is listening on port 8080", "printed": []}' > "$alog"
 A() { HISTFILE="$ah" HINTDB_LOG="$alog" "$@"; }
 
-out=$(A hintdb answer 2>&1)
-line "answer: the last question, with its number; not in history: newest" "$out" 1 \
+out=$(A hintdb remember 2>&1)
+line "remember: the last question, with its number; not in history: newest" "$out" 1 \
   "$(printf '2\twho is listening on port 8080\tnewest')"
-line "answer: last command, skipping hint, history housekeeping and trivial lines" "$out" 2 \
+line "remember: last command, skipping hint, history housekeeping and trivial lines" "$out" 2 \
   "ps aux | grep nginx"
-out=$(A hintdb answer fakess 2>&1)
-line "answer TOOL: newest line with that tool (sudo and path skipped), comment dropped" "$out" 2 \
+out=$(A hintdb remember fakess 2>&1)
+line "remember TOOL: newest line with that tool (sudo and path skipped), comment dropped" "$out" 2 \
   "sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
-line "answer TOOL: any command in a pipeline counts" "$(A hintdb answer grep 2>&1)" 2 "ps aux | grep nginx"
-line "answer history: history lines found when named, the hint line still skipped" \
-  "$(A hintdb answer history 2>&1)" 2 "history -d 12"
-line "answer: a ; with no space still splits the line" \
-  "$(printf '%s\n' 'du -sh /srv/current' 'history -a;hint answer' > "$tmp/h2"; HISTFILE="$tmp/h2" HINTDB_LOG="$alog" hintdb answer 2>&1)" 2 \
+line "remember TOOL: any command in a pipeline counts" "$(A hintdb remember grep 2>&1)" 2 "ps aux | grep nginx"
+line "remember history: history lines found when named, the hint line still skipped" \
+  "$(A hintdb remember history 2>&1)" 2 "history -d 12"
+line "remember: a ; with no space still splits the line" \
+  "$(printf '%s\n' 'du -sh /srv/current' 'history -a;hint remember' > "$tmp/h2"; HISTFILE="$tmp/h2" HINTDB_LOG="$alog" hintdb remember 2>&1)" 2 \
   "du -sh /srv/current"
-line "answer: a quoted ; is not a separator" \
-  "$(printf '%s\n' "fakess -x 'a;hint'" > "$tmp/h3"; HISTFILE="$tmp/h3" HINTDB_LOG="$alog" hintdb answer 2>&1)" 2 \
+line "remember: a quoted ; is not a separator" \
+  "$(printf '%s\n' "fakess -x 'a;hint'" > "$tmp/h3"; HISTFILE="$tmp/h3" HINTDB_LOG="$alog" hintdb remember 2>&1)" 2 \
   "fakess -x 'a;hint'"
-line "answer cd: trivial lines found when named" "$(A hintdb answer cd 2>&1)" 2 "cd /etc"
-out=$(A hintdb answer zzqq 2>&1)
-status "answer TOOL not in history: exit 1" 1 $?
-has "answer TOOL not in history: says so" "$out" "no zzqq command found in"
+line "remember cd: trivial lines found when named" "$(A hintdb remember cd 2>&1)" 2 "cd /etc"
+out=$(A hintdb remember zzqq 2>&1)
+status "remember TOOL not in history: exit 1" 1 $?
+has "remember TOOL not in history: says so" "$out" "no zzqq command found in"
 
-out=$(HISTFILE="$tmp/no-such-history" HINTDB_LOG="$alog" hintdb answer 2>&1)
-status "answer: missing history file: exit 1" 1 $?
-has "answer: missing history file: says to export HISTFILE" "$out" "export HISTFILE"
-out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/no-such-log" hintdb answer 2>&1)
-status "answer: no question yet: exit 1" 1 $?
-has "answer: no question yet: says so" "$out" "no question to answer yet"
+out=$(HISTFILE="$tmp/no-such-history" HINTDB_LOG="$alog" hintdb remember 2>&1)
+status "remember: missing history file: exit 1" 1 $?
+has "remember: missing history file: says to export HISTFILE" "$out" "export HISTFILE"
+out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/no-such-log" hintdb remember 2>&1)
+status "remember: no question yet: exit 1" 1 $?
+has "remember: no question yet: says so" "$out" "no question to answer yet"
 printf '%s\n' '{"time": "2099-01-01T09:00:00", "query": "asked after the last write", "printed": []}' > "$tmp/future-log"
-out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/future-log" hint answer fakess 2>&1 </dev/null)
-status "answer: history not written since the question: exit 1" 1 $?
-has "answer: history not written since the question: says what to run" "$out" \
-  "run:  history -a; hint answer fakess"
-lacks "answer: history not written: no prompt" "$out" "answer to"
-out=$(HINTDB_ANSWERS=/dev/null A hintdb answer 2>&1)
-status "answer: HINTDB_ANSWERS=/dev/null turns it off" 1 $?
-has "answer: off says so" "$out" "answers are off"
+out=$(HISTFILE="$ah" HINTDB_LOG="$tmp/future-log" hint remember fakess 2>&1 </dev/null)
+status "remember: history not written since the question: exit 1" 1 $?
+has "remember: history not written since the question: says what to run" "$out" \
+  "run:  history -a; hint remember fakess"
+lacks "remember: history not written: no prompt" "$out" "answer to"
+out=$(HINTDB_ANSWERS=/dev/null A hintdb remember 2>&1)
+status "remember: HINTDB_ANSWERS=/dev/null turns it off" 1 $?
+has "remember: off says so" "$out" "answers are off"
 
 rm -f "$ans"
-out=$(printf '\n' | A hint answer fakess 2>&1)
-status "hint answer: empty line cancels (exit 1)" 1 $?
-has "hint answer: cancel says nothing saved" "$out" "cancelled, nothing saved"
-[ -e "$ans" ] && bad "hint answer: cancel writes no file" || ok "hint answer: cancel writes no file"
-out=$(A hint answer fakess 2>&1 <<<"sudo fakess -ltnp 'sport = :8080'")
-status "hint answer: edited line saved (exit 0)" 0 $?
-has "hint answer: prompt shows the question" "$out" 'answer to 2 "who is listening on port 8080":'
-has "hint answer: prompt shows the command" "$out" "> sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
-has "hint answer: says the keys" "$out" "  Enter saves, Ctrl-C cancels. Not this line? Edit it."
-lacks "hint answer TOOL: no hint to name a tool" "$out" "name its tool"
-has "hint answer: without TOOL, says how to name one" \
-  "$(printf '\n' | A hint answer 2>&1)" "Not this line? Edit it, or name its tool: hint answer TOOL."
-has "hint answer: says where it was saved" "$out" "saved to"
-line "hint answer: the line as edited, with the question as its comment" "$(cat "$ans")" 1 \
+out=$(printf '\n' | A hint remember fakess 2>&1)
+status "hint remember: empty line cancels (exit 1)" 1 $?
+has "hint remember: cancel says nothing saved" "$out" "cancelled, nothing saved"
+[ -e "$ans" ] && bad "hint remember: cancel writes no file" || ok "hint remember: cancel writes no file"
+out=$(A hint remember fakess 2>&1 <<<"sudo fakess -ltnp 'sport = :8080'")
+status "hint remember: edited line saved (exit 0)" 0 $?
+has "hint remember: prompt shows the question" "$out" 'remember as the answer to 2 "who is listening on port 8080":'
+has "hint remember: prompt shows the command" "$out" "> sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
+has "hint remember: says the keys" "$out" "  Enter saves, Ctrl-C cancels. Not this line? Edit it."
+lacks "hint remember TOOL: no hint to name a tool" "$out" "name its tool"
+has "hint remember: without TOOL, says how to name one" \
+  "$(printf '\n' | A hint remember 2>&1)" "Not this line? Edit it, or name its tool: hint remember TOOL."
+has "hint remember: says where it was saved" "$out" "saved to"
+line "hint remember: the line as edited, with the question as its comment" "$(cat "$ans")" 1 \
   "sudo fakess -ltnp 'sport = :8080'  # who is listening on port 8080"
-has "hint answer: file mode 600" "$(stat -c %a "$ans")" "600"
+has "hint remember: file mode 600" "$(stat -c %a "$ans")" "600"
 printf '%s\n' '{"time": "2026-11-03T09:00:00", "query": "space used by the current release", "printed": []}' >> "$alog"
-A hint answer du >/dev/null 2>&1 <<<"du -sh /srv/current"
-has "hint answer: answers are appended" "$(wc -l <"$ans")" "2"
-line "hint answer: each answer goes with the last question" "$(cat "$ans")" 2 \
+A hint remember du >/dev/null 2>&1 <<<"du -sh /srv/current"
+has "hint remember: answers are appended" "$(wc -l <"$ans")" "2"
+line "hint remember: each answer goes with the last question" "$(cat "$ans")" 2 \
   "du -sh /srv/current  # space used by the current release"
 
-out=$(hint answer -x 2>&1)
-status "hint answer -x: usage, exit 2" 2 $?
+out=$(hint remember -x 2>&1)
+status "hint remember -x: usage, exit 2" 2 $?
 printf '%s\n' 'yes | fakedock prune' > "$reply"
-hint answer yes to all prompts >/dev/null 2>&1
-has "answer + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
-  "answer yes to all prompts"
+hint remember my ssh key passphrase >/dev/null 2>&1
+has "remember + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
+  "remember my ssh key passphrase"
 
 # In the index: built in, read as history, merged with the row of the same shape.
-has "sources: answers file listed as built in" "$(hintdb sources)" "$ans	(built in: hint answer)"
+has "sources: answers file listed as built in" "$(hintdb sources)" "$ans	(built in: hint remember)"
 has "sources: no answers yet" "$(HINTDB_ANSWERS="$tmp/none" hintdb sources)" "no answers yet"
 lacks "sources: answers off: not listed" "$(HINTDB_ANSWERS=/dev/null hintdb sources)" "built in"
 out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "space used by the current release" "df -h" 2>/dev/null)
-line "answered row found by the question's words" "$out" 1 "du -sh /srv/current"
-line "answered row: merged with the history row, the question as its note" "$out" 2 \
+line "remembered row found by the question's words" "$out" 1 "du -sh /srv/current"
+line "remembered row: merged with the history row, the question as its note" "$out" 2 \
   "  # your history x2: space used by the current release"
 out=$(HINTDB_DB="$tmp/answer.db" hintdb find -q "who is listening on port 8080" "netstat -tulpn" 2>/dev/null)
-has "answered command found despite the wrong guessed tool" "$out" "sudo fakess -ltnp 'sport = :8080'"
-has "answered command not on PATH is kept (it has a note)" "$out" "# your history x1: who is listening on port 8080"
+has "remembered command found despite the wrong guessed tool" "$out" "sudo fakess -ltnp 'sport = :8080'"
+has "remembered command not on PATH is kept (it has a note)" "$out" "# your history x1: who is listening on port 8080"
 
 echo "== hint forget"
 # Its own sources: a reference history and a notes file; the live history
@@ -940,7 +940,7 @@ hint forget a wifi network >/dev/null 2>&1
 has "forget + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
   "forget a wifi network"
 
-echo "== answer and forget after the question"
+echo "== remember and forget after the question"
 # The question is in the history: only the lines after it count. forget
 # takes the first (the suggestion tried), answer the last (what worked).
 qh="$tmp/question-history" qlog="$tmp/question-log.jsonl"
@@ -954,16 +954,16 @@ line "forget: found the question" "$out" 1 "$(printf '1\tshow me the last histor
 line "forget: the first line after the question (history lines count now)" "$out" 2 "history -n 10"
 line "forget TOOL: the first TOOL line after the question" "$(Q hintdb forget history 2>&1)" 2 "history -n 10"
 line "forget TOOL: another tool" "$(Q hintdb forget fc 2>&1)" 2 "fc -ln -10"
-line "answer: the last line after the question, trivial ones skipped" "$(Q hintdb answer 2>&1)" 2 "fc -ln -10"
-line "answer TOOL: the last TOOL line after the question" "$(Q hintdb answer history 2>&1)" 2 "history --help"
+line "remember: the last line after the question, trivial ones skipped" "$(Q hintdb remember 2>&1)" 2 "fc -ln -10"
+line "remember TOOL: the last TOOL line after the question" "$(Q hintdb remember history 2>&1)" 2 "history --help"
 out=$(Q hintdb forget fakess 2>&1)
 status "forget TOOL only before the question: exit 1" 1 $?
 has "forget TOOL only before the question: not looked for there" "$out" \
   'no fakess command since you asked "show me the last history items"'
 printf '%s\n' 'echo before' 'hint show me the last history items' > "$tmp/q-only"
-out=$(HISTFILE="$tmp/q-only" HINTDB_LOG="$qlog" hintdb answer 2>&1)
-status "answer: nothing run since the question: exit 1" 1 $?
-has "answer: nothing run since the question: says so" "$out" "no command since you asked"
+out=$(HISTFILE="$tmp/q-only" HINTDB_LOG="$qlog" hintdb remember 2>&1)
+status "remember: nothing run since the question: exit 1" 1 $?
+has "remember: nothing run since the question: says so" "$out" "no command since you asked"
 printf '%s\n' "hint 'what is' \"the  thing\"" 'fakess -q' > "$tmp/q-quoted"
 printf '%s\n' '{"time": "2026-11-02T09:00:00", "query": "what is the  thing", "printed": []}' > "$tmp/q-quoted-log"
 line "the question found through the shell's quoting" \
@@ -972,23 +972,23 @@ line "the question found through the shell's quoting" \
 line "the last asking of the question counts" \
   "$(printf '%s\n' 'hint show me the last history items' 'fakess -a' 'hint show me the last history items' 'fakess -b' > "$tmp/q-twice"; \
      HISTFILE="$tmp/q-twice" HINTDB_LOG="$qlog" hintdb forget 2>&1)" 2 "fakess -b"
-printf '%s\n' 'hint show me the last history items' 'history 10' 'vim ~/.bash_history' 'hint answer' > "$tmp/q-trivial"
-out=$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb answer 2>&1)
-status "answer: only trivial lines since the question: exit 1" 1 $?
-has "answer: only trivial lines: says so" "$out" 'only trivial commands since you asked "show me the last history items";'
-has "answer: only trivial lines: each with the command that takes it, in order" "$out" \
-  "$(printf '  history 10            hint answer history\n  vim ~/.bash_history   hint answer vim')"
+printf '%s\n' 'hint show me the last history items' 'history 10' 'vim ~/.bash_history' 'hint remember' > "$tmp/q-trivial"
+out=$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb remember 2>&1)
+status "remember: only trivial lines since the question: exit 1" 1 $?
+has "remember: only trivial lines: says so" "$out" 'only trivial commands since you asked "show me the last history items";'
+has "remember: only trivial lines: each with the command that takes it, in order" "$out" \
+  "$(printf '  history 10            hint remember history\n  vim ~/.bash_history   hint remember vim')"
 has "forget: only trivial lines: the forget form" \
   "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb forget 2>&1)" "  history 10            hint forget history"
-line "answer TOOL: a trivial line found when its tool is named" \
-  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb answer history 2>&1)" 2 "history 10"
+line "remember TOOL: a trivial line found when its tool is named" \
+  "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb remember history 2>&1)" 2 "history 10"
 out=$(Q hint forget 2>&1 </dev/null)
 has "hint forget: says it starts after the question" "$out" \
   'which command? the first after "hint show me the last history items":'
 out=$(printf '\n' | F hint forget 2>&1)
 lacks "hint forget: no question in the log, no note" "$out" "not in your history file"
-out=$(printf '\n' | A hint answer 2>&1)
-has "hint answer: question not in history: says the newest is offered" "$out" \
+out=$(printf '\n' | A hint remember 2>&1)
+has "hint remember: question not in history: says the newest is offered" "$out" \
   "(your last question is not in your history file: this is your newest command)"
 
 echo
