@@ -177,7 +177,7 @@ remember() {
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
   cand=$(hintdb remember -- "$@") || exit 1
   { IFS=$'\t' read -r n q where; IFS= read -r cmd; } <<<"$cand"
-  printf 'remember as the answer to %s "%s":\n' "$n" "$q" >&2
+  printf 'remember as the answer to "%s" (lookup %s):\n' "$q" "$n" >&2
   [ "$where" = after ] || not_found_note
   keys_help "Enter saves" remember $#
   edit_line "$cmd" saved
@@ -198,7 +198,7 @@ forget() {
     # Nothing run since the question: choose from what the lookup printed.
     local cmds i=0 num
     mapfile -t cmds < <(tail -n +2 <<<"$cand")
-    printf 'which command? from "hint %s":\n' "$q" >&2
+    printf 'which command? from "%s" (lookup %s):\n' "$q" "$n" >&2
     for cmd in "${cmds[@]}"; do i=$((i + 1)); printf '  %d  %s\n' "$i" "$cmd" >&2; done
     trap 'echo >&2; echo "hint: cancelled, nothing saved" >&2; exit 130' INT
     if [ -t 0 ]; then
@@ -215,7 +215,7 @@ forget() {
     cmd=${cmds[num - 1]}
     echo "  Enter marks it WRONG, Ctrl-C cancels. Not this line? Edit it." >&2
   elif [ "$where" = after ]; then
-    printf 'which command? the first after "hint %s":\n' "$q" >&2
+    printf 'which command? the first after "%s" (lookup %s):\n' "$q" "$n" >&2
   else
     echo "which command?" >&2
     [ -n "$q" ] && not_found_note

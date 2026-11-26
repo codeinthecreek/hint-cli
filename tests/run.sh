@@ -843,7 +843,7 @@ has "hint remember: cancel says nothing saved" "$out" "cancelled, nothing saved"
 [ -e "$ans" ] && bad "hint remember: cancel writes no file" || ok "hint remember: cancel writes no file"
 out=$(A hint remember fakess 2>&1 <<<"sudo fakess -ltnp 'sport = :8080'")
 status "hint remember: edited line saved (exit 0)" 0 $?
-has "hint remember: prompt shows the question" "$out" 'remember as the answer to 2 "who is listening on port 8080":'
+has "hint remember: prompt shows the question" "$out" 'remember as the answer to "who is listening on port 8080" (lookup 2):'
 has "hint remember: prompt shows the command" "$out" "> sudo /usr/sbin/fakess -ltnp 'sport = :8080'"
 has "hint remember: says the keys" "$out" "  Enter saves, Ctrl-C cancels. Not this line? Edit it."
 lacks "hint remember TOOL: no hint to name a tool" "$out" "name its tool"
@@ -1009,7 +1009,7 @@ line "remember TOOL: a trivial line found when its tool is named" \
   "$(HISTFILE="$tmp/q-trivial" HINTDB_LOG="$qlog" hintdb remember history 2>&1)" 2 "history 10"
 out=$(Q hint forget 2>&1 </dev/null)
 has "hint forget: says it starts after the question" "$out" \
-  'which command? the first after "hint show me the last history items":'
+  'which command? the first after "show me the last history items" (lookup 1):'
 out=$(printf '\n' | F hint forget 2>&1)
 lacks "hint forget: no question in the log, no note" "$out" "not in your history file"
 out=$(printf '\n' | A hint remember 2>&1)
@@ -1100,7 +1100,7 @@ if [ "$(tail -n +2 <<<"$out")" = "$(printf '%s\n' 'history 10' 'history -n 10' '
 else bad "forget list: commands in order, once each; no status lines, templates or marked commands" "$out"; fi
 out=$(L hint forget 2>&1 <<<$'2\nhistory -n 10\n-n takes no count')
 status "hint forget list: exit 0" 0 $?
-has "hint forget list: asks from which lookup" "$out" 'which command? from "hint show me the last history items":'
+has "hint forget list: asks from which lookup" "$out" 'which command? from "show me the last history items" (lookup 1):'
 has "hint forget list: numbered" "$out" "  2  history -n 10"
 has "hint forget list: asks for a number" "$out" "number (Ctrl-C cancels):"
 has "hint forget list: then the editable line" "$out" "> history -n 10"

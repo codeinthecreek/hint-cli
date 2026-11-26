@@ -682,7 +682,13 @@ answers to questions.
   saving. Enter saves, Ctrl-C or an empty line cancels. A line under the
   question says so, and how to reach another line: edit it, or (when no
   TOOL was given) `hint remember TOOL` (the author, 2026-11-26). `hint forget`
-  says the same, with "Enter lists where it is".
+  says the same, with "Enter marks it WRONG". All three headers name the
+  question the same way, as typed, with its number in the query log (the
+  number `hint history` lists): `remember as the answer to "QUESTION"
+  (lookup N):`, `which command? the first after "QUESTION" (lookup N):`,
+  `which command? from "QUESTION" (lookup N):` (made consistent
+  2026-11-26: only remember showed the number, and only forget put `hint`
+  in front of the question).
 - **Saved:** the whole line as edited, not only the TOOL part, so it has
   the shape of the user's existing row and merges with it. One line
   `COMMAND  # QUESTION` appended to the answers file: `HINTDB_ANSWERS`,
@@ -760,7 +766,7 @@ since the second rests on what the first found.
   check that the history file was written since the last lookup, when
   there is one. A question is not required: with none in the log, or none
   found in the file, the newest line is offered. The prompt says where it
-  started: `which command? the first after "hint QUESTION":`. The line is
+  started: `which command? the first after "QUESTION" (lookup N):`. The line is
   editable, so `hint forget history` plus an edit reaches a line that was
   not run this time. Enter goes on; an empty line or Ctrl-C cancels.
 - **From the last lookup's output** (added 2026-11-26; user: "I see
