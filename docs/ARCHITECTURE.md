@@ -196,7 +196,7 @@ rephrase.
 ### Log
 
 The question, the guesses and the printed lines are added to a local query
-log (`queries.jsonl`), which `hint history` and `hint search` read without
+log (`queries.jsonl`), which `hint history` reads without
 asking the model.
 
 ### Remember

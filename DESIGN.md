@@ -515,7 +515,7 @@ other words, so the limitation stays (README).
 ## Query log
 
 - **Purpose:** a record of real lookups, for looking up past answers
-  (`hint history`, `hint search`), per-source usage, and the question that
+  (`hint history`), per-source usage, and the question that
   `hint remember` answers (see Remember).
 - **Written by `hintdb find`** from the command line, after the answer is
   printed, one JSON line per lookup: `time` (local, ISO), `query`,
@@ -528,33 +528,37 @@ other words, so the limitation stays (README).
   `/dev/null` turns it off). Mode 0600. One `O_APPEND` write per lookup, so
   several terminals do not interleave. A failed write only warns. No
   rotation for now: one line per lookup stays small.
-- **Read by `hintdb log`**, one line per match, the last N (`--last`,
+- **Read by `hintdb log`**, the last N matching lookups (`--last`,
   default 10), oldest first like `history | tail`; `--count` prints the
-  number of lines instead. Matching: every word, case-insensitive plain
-  substrings. Exit 1 when nothing matches, like grep. No model call.
-  - history (default): one line per lookup whose question matches:
-    number, time, question.
-  - `--printed` (search): grep over past commands. One line per printed
-    command line (not the `#` lines) whose text or note matches; the
-    status labels ("your history xN", "your notes", "your Makefile",
-    "your justfile", "model suggestion")
-    are not matched, or `search history` would match every row. A command
-    printed by several lookups shows once, with the newest lookup's number,
-    date and question and the count. Commands are never truncated.
+  number of lookups instead. Matching: every word (a quoted phrase is its
+  words), case-insensitive plain substrings. Exit 1 when nothing matches,
+  like grep. No model call.
+  - A lookup matches when its question or a command it printed contains
+    the words. One line per lookup: number, time, question; then,
+    indented, each printed command that matched (its text or its status
+    comment; the labels "your history xN", "your notes", "your Makefile",
+    "your justfile", "model suggestion" are not matched, or `history
+    history` would match every row). A command printed twice by one lookup
+    is shown once; commands are never truncated.
+  - Merged 2026-11-26 from two forms: `hint history WORD` matched only the
+    question, and `hint search WORD` (`--printed`) grepped the printed
+    commands, one line per command with its newest lookup and a count of
+    lookups. "Search" was the wrong word next to hint itself, which is the
+    search, and the two forms plus `-H`/`-S` flags for several words were
+    more to learn than the task needs: recall starts with the command, and
+    finding a past lookup by anything in it covers both (the author:
+    "simple is best"). The per-command count was given up.
   - `--show N`: the full entry N, as printed then, with `# from <files>`
     (home as `~`) after each of the user's rows, from the log's `rows`:
     bad rows are better fixed in their source than hidden, and this is
-    how to find the source. `hint` accepts it after
-    `history` and `-H` only: it shows a history entry, and after `search`
-    it read as if it filtered the search.
+    how to find the source.
   - `--delete N[,N|N-M]...`: blanks the entries' lines, so other numbers do
     not change (deleting 41 then 42 deletes the 42 that was shown). Every
     single number must be an entry or nothing is deleted (a mistyped
     number deletes nothing); a range deletes the entries in it. The file
     is rewritten in place under an exclusive `flock`, and every append
     takes the same lock, so a lookup in another terminal waits instead of
-    being lost. No backup copy: it prints what it deleted. History only in
-    `hint`, like `--show`. Agreed 2026-11-20 for lookups that went to the
+    being lost. No backup copy: it prints what it deleted. Agreed 2026-11-20 for lookups that went to the
     model by mistake; bad index rows are better fixed in their source.
   An entry's number is its line in the file: stable while the log is only
   appended to; damaged and deleted lines are skipped but keep their
@@ -562,16 +566,16 @@ other words, so the limitation stays (README).
   2026-11-20: printing every answer in full made the list unusable within
   a day, so lists are one line per item and the full answer is asked for
   by number.
-- **`hint` forms.** `hint history [OPTIONS] [WORD|N]` (questions; a lone
-  positive number is the last N) and `hint search [OPTIONS] WORD` (printed
-  commands) are commands when at most one plain word follows, with the
-  options `-n/--last N`, `-c/--count` and, for history only,
-  `-s/--show NUM` or `-d/--delete NUMS` (alone) anywhere. `history` alone lists the last 10
-  lookups, like bash `history`; `search` alone prints the usage, since it
-  needs a word. Two or more plain words make the line a question, and an
-  unknown option with at most one plain word prints the usage. `help` is a command only
-  alone. Flags for several words: `-H/--history [WORD...]`,
-  `-S/--search WORD...`, same options. Agreed 2026-11-20: a reserved word
+- **`hint` forms.** `hint history [OPTIONS] [WORD|N]` (a lone positive
+  number is the last N) is a command when at most one plain word follows
+  (a quoted phrase is one), with the options `-n/--last N`, `-c/--count`,
+  or `-s/--show NUM` or `-d/--delete NUMS` (alone) anywhere. `history`
+  alone lists the last 10 lookups, like bash `history`. Two or more plain
+  words make the line a question, and an unknown option with at most one
+  plain word prints the usage. `help` is a command only alone. Several
+  words are quoted (the `-H`/`-S` flags for them were dropped 2026-11-26;
+  `hint -H ...` and `hint search ...` are now questions, like any other
+  first word). Agreed 2026-11-20: a reserved word
   that swallowed questions would fail silently, giving the wrong kind of
   answer, so the word forms are kept to one plain word (a real question
   leads with words, "what does history -c do"); a miss there says how to
@@ -607,7 +611,7 @@ answers to questions.
   lookup was rejected: a mistyped flag would be remembered, and with
   several terminals writing to one history file the lines after a lookup
   may come from another terminal.
-- **Form:** `hint remember [TOOL]`. Same rule as `history` and `search`: a
+- **Form:** `hint remember [TOOL]`. Same rule as `history`: a
   command when at most one plain word follows, a question with two or
   more (`hint remember my ssh key passphrase` is a question).
 - **Usual sequence:** `hint QUESTION`, then the user tries commands until

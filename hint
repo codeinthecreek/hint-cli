@@ -2,8 +2,7 @@
 # hint - natural-language command lookup.
 #
 #   hint how do I create an ssh tunnel
-#   hint history tunnel        past questions containing "tunnel"
-#   hint search ssh            past answers containing "ssh"
+#   hint history tunnel        past lookups whose question or commands contain "tunnel"
 #   hint remember [TOOL]         save the command that answered the last question
 #   hint forget [TOOL]         mark a wrong command, so hint never shows it
 #
@@ -29,46 +28,39 @@ usage() {
   cat >&2 <<'EOF'
 usage: hint <what you want to do>
        hint history [OPTIONS] [WORD|N]
-                                       past questions: the last 10, those
-                                       with WORD, or the last N
-       hint search [OPTIONS] WORD      past commands containing WORD
-       hint history --show NUM         the full answer of past question NUM
+                                       past lookups: the last 10, those whose
+                                       question or commands contain WORD, or
+                                       the last N
+       hint history --show NUM         the full answer of lookup NUM
        hint remember [TOOL]            save your last command (or your last
                                        TOOL command) as the answer to the
                                        last question, after you confirm it
        hint forget [TOOL]              mark the first command after the last
                                        question (or the first TOOL command)
                                        WRONG, so hint never shows it again
-       hint -H, --history [OPTIONS] [WORD...]
-                                       past questions containing all WORDs
-       hint -S, --search [OPTIONS] WORD...
-                                       past commands containing all WORDs
        hint -h, --help                 this help
-OPTIONS, anywhere after history, search, -H or -S:
-  -n, --last N     only the last N matching lines (default 10)
-  -c, --count      print the number of matching lines instead
-After history or -H only, and on its own (no WORD, -n or -c):
-  -s, --show NUM   the full answer of entry NUM (the number that
-                   history and search print), with each of your rows'
-                   source files
+OPTIONS, anywhere after history:
+  -n, --last N     only the last N matching lookups (default 10)
+  -c, --count      print the number of matching lookups instead
+On its own (no WORD, -n or -c):
+  -s, --show NUM   the full answer of lookup NUM (the number that
+                   history prints), with each of your rows' source files
   -d, --delete NUM[,NUM|NUM-NUM]...
-                   delete entries from the log; the others keep their
+                   delete lookups from the log; the others keep their
                    numbers, and nothing is deleted if a NUM is not there
-With a second WORD, the line is a question for the model instead:
+For several words, quote them:  hint history "ssh key"
+Unquoted, a second word makes the line a question for the model instead:
   hint history without duplicates
 An unknown option prints this help.
 EOF
   exit 2
 }
 
-# past MODE FORM ARGS...   look up past lookups in the query log (hintdb log).
-# MODE: history (match the question) or search (match the printed lines).
-# FORM: "word" for `hint history WORD`, so a miss says how to ask instead.
+# past ARGS...   past lookups in the query log (hintdb log): those whose
+# question or printed commands contain WORD; --show, --delete.
 past() {
-  local mode=$1 form=$2 count= show= del= last= rc
+  local count= show= del= last= rc
   local opts=() words=()
-  shift 2
-  [ "$mode" = search ] && opts=(--printed)
   while [ $# -gt 0 ]; do
     case "$1" in
       -n|--last|--last=*)
@@ -108,29 +100,22 @@ past() {
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
   # --show and --delete stand alone: no words, --last, --count or each other.
   if [ -n "$show$del" ]; then
-    [ "$mode" = history ] && [ ${#words[@]} -eq 0 ] && [ -z "$count$last" ] \
-      && [ -z "$show" -o -z "$del" ] || usage
+    [ ${#words[@]} -eq 0 ] && [ -z "$count$last" ] && [ -z "$show" -o -z "$del" ] || usage
     [ -n "$show" ] && exec hintdb log --show "$show"
     exec hintdb log --delete "$del"
   fi
   # `hint history 20`: a lone number is the last N, not a word.
-  if [ "$form" = word ] && [ "$mode" = history ] && [ ${#words[@]} -eq 1 ] \
-     && [[ ${words[0]} =~ ^[1-9][0-9]*$ ]]; then
+  if [ ${#words[@]} -eq 1 ] && [[ ${words[0]} =~ ^[1-9][0-9]*$ ]]; then
     [ -z "$count" ] && opts+=(--last "${words[0]}")
     words=()
   fi
-  [ "$mode" = search ] && [ ${#words[@]} -eq 0 ] && usage
   hintdb log "${opts[@]}" -- "${words[@]}"
   rc=$?
   if [ "$rc" -eq 1 ] && [ -z "$count" ]; then
-    local what="questions"
-    [ "$mode" = search ] && what="commands"
     if [ ${#words[@]} -eq 0 ]; then
-      echo "hint: no past $what yet" >&2
-    elif [ "$form" = word ]; then
-      echo "hint: no past $what contain \"${words[*]}\"; to ask it as a question, add a word" >&2
+      echo "hint: no past lookups yet" >&2
     else
-      echo "hint: no past $what contain \"${words[*]}\"" >&2
+      echo "hint: no past lookups contain \"${words[*]}\"; to ask it as a question, add a word" >&2
     fi
   fi
   exit "$rc"
@@ -237,13 +222,10 @@ forget() {
 [ $# -gt 0 ] || usage
 case "$1" in
   -h|--help) usage ;;
-  -H|--history) shift; past history flag "$@" ;;
-  -S|--search) shift; past search flag "$@" ;;
-  # history alone: the last 10 lookups; search alone: usage (it needs a word).
-  # At most one plain word plus options: a log lookup. Two or more plain
-  # words: a question (falls through).
-  history|search)
-    [ $# -eq 1 ] && [ "$1" = search ] && usage
+  # history alone: the last 10 lookups. At most one plain word (a quoted
+  # phrase is one) plus options: a log lookup. Two or more plain words: a
+  # question (falls through).
+  history)
     plain=0 skip=
     for a in "${@:2}"; do
       if [ -n "$skip" ]; then skip=; continue; fi
@@ -253,7 +235,7 @@ case "$1" in
         *) plain=$((plain + 1)) ;;
       esac
     done
-    [ "$plain" -le 1 ] && past "$1" word "${@:2}" ;;
+    [ "$plain" -le 1 ] && past "${@:2}" ;;
   # remember or forget alone or with one TOOL. Two or more words: a question
   # ("remember my ssh key passphrase", "forget a wifi network").
   remember|forget)

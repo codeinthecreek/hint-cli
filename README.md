@@ -266,16 +266,11 @@ The last 10 lookups, like bash `history`:
 hint history
 ```
 
-Past questions containing a word:
+Past lookups containing a word, in the question or in a command they
+showed you. A command that matched is shown under its lookup:
 
 ```bash
-hint history tunnel
-```
-
-Commands you were given that contain a word:
-
-```bash
-hint search rsync
+hint history rsync
 ```
 
 The full answer of lookup 57, with the files each of your rows came from:
@@ -290,12 +285,12 @@ Delete lookups you didn't mean, like bash `history -d`:
 hint history --delete 41,42
 ```
 
-`history` and `search` take at most one word. With two or more words the
-line is a question for the model, so `hint history without duplicates` is
-asked as usual. To search for several words, use `-H` or `-S`:
+`history` takes at most one word. With two or more words the line is a
+question for the model, so `hint history without duplicates` is asked as
+usual. To look for several words, quote them; each word must match:
 
 ```bash
-hint -H ssh key
+hint history "ssh key"
 ```
 
 ## Configuration
@@ -336,17 +331,16 @@ commands from it.
 
 | Form or option | Meaning |
 |---|---|
-| `-H`, `--history [WORD...]` | past questions containing all WORDs (no words: every lookup) |
-| `-S`, `--search WORD...` | past commands containing all WORDs |
-| `-n`, `--last N` | only the last N matching lines (default 10) |
-| `-c`, `--count` | print the number of matching lines instead |
+| `history [WORD\|N]` | past lookups: the last 10, those whose question or commands contain WORD, or the last N |
+| `-n`, `--last N` | only the last N matching lookups (default 10) |
+| `-c`, `--count` | print the number of matching lookups instead |
 | `-s`, `--show NUM` | the full answer of lookup NUM, with your rows' source files |
 | `-d`, `--delete NUM[,NUM\|NUM-NUM]...` | delete lookups from the log |
-| `answer [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
+| `remember [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
 | `forget [TOOL]` | mark the first command after your last question, or the first TOOL command, as wrong, so hint never shows it |
 
-`-n` and `-c` work after `history`, `search`, `-H` and `-S`. `--show` and
-`--delete` work only after `history` and `-H`, on their own. `hint help`
+`-n`, `-c`, `--show` and `--delete` work after `history`; `--show` and
+`--delete` on their own. `hint help`
 prints the usage; `hint help me ...` is a question.
 
 ### hintdb commands
@@ -361,7 +355,7 @@ prints the usage; `hint help me ...` is a question.
 | `hintdb stats` | rows per kind and per source file (and how many come only from that file) |
 | `hintdb stats --source PATH` | the rows from one source file or directory, most used first |
 | `hintdb find [--debug] -q QUESTION [GUESS...]` | your commands for a question and the model's guesses (used by `hint`) |
-| `hintdb log ...` | read and edit the query log (used by `hint history` and `hint search`) |
+| `hintdb log ...` | read and edit the query log (used by `hint history`) |
 | `hintdb remember [TOOL]` | the last question and the command that answers it (used by `hint remember`) |
 | `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND, and where it is marked |
 | `hintdb forget --save [--reason R] -- COMMAND` | mark COMMAND as wrong (used by `hint forget`) |

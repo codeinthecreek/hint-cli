@@ -21,8 +21,8 @@ DB, because dedup is global across sources.
                                                      source file, for checking dedup
   hintdb stats --source PATH                         the entries from one source
                                                      file (or a directory's files)
-  hintdb log [--printed] [-n N] [-c] [WORD...]       past questions containing all
-                                                     WORDs (--printed: past commands)
+  hintdb log [-n N] [-c] [WORD...]                   past lookups whose question or
+                                                     printed commands contain all WORDs
   hintdb log --show N                                the full entry number N
   hintdb log --delete N[,N|N-M]...                   delete entries from the log
   hintdb remember [TOOL]                             the last question and the
@@ -1527,10 +1527,19 @@ def log_time(rec):
 
 
 def log_history(words):
-    """One line per lookup whose question contains every word
-    (case-insensitive substrings): number, time, question."""
-    return ["%5d  %s  %s" % (r["n"], log_time(r), r["query"])
-            for r in read_log() if has_words(r["query"], words)]
+    """The lookups whose question or printed commands contain every word
+    (case-insensitive substrings), oldest first, each as a list of lines:
+    number, time, question; then, indented, each printed command that
+    matched (its text or its status comment; labels such as "your history
+    x3" do not match). Without words, every lookup, one line each."""
+    out = []
+    for r in read_log():
+        cmds = matched_commands(r, words) if words else []
+        if not cmds and not has_words(r["query"], words):
+            continue
+        out.append(["%5d  %s  %s" % (r["n"], log_time(r), r["query"])]
+                   + [" " * 9 + c for c in cmds])
+    return out
 
 
 SOURCE_LABEL = {"make": "your Makefile", "just": "your justfile", "git": "your git aliases",
@@ -1547,29 +1556,16 @@ def status_note(line):
     return STATUS_LABEL.sub("", line, count=1)
 
 
-def log_search(words):
-    """One line per printed command whose text or status comment contains
-    every word, like grep over past answers. Only command lines are shown;
-    a command printed by several lookups is shown once, with its newest
-    lookup (number, date, question) and how many lookups printed it."""
-    hits = {}   # command -> [newest rec, lookups]
-    for rec in read_log():
-        lines = printed_of(rec)
-        seen = set()
-        for i, cmd in enumerate(lines):
-            if cmd[:1] in ("#", " ", ""):
-                continue
-            note = status_note(lines[i + 1]) if i + 1 < len(lines) else ""
-            if cmd in seen or not has_words(cmd + "\n" + note, words):
-                continue
-            seen.add(cmd)
-            h = hits.pop(cmd, [None, 0])   # re-insert: order by newest lookup
-            hits[cmd] = [rec, h[1] + 1]
-    out = []
-    for cmd, (rec, k) in hits.items():
-        tail = "%d  %s %s" % (rec["n"], log_time(rec)[:10], rec["query"])
-        tail += f" (x{k})" if k > 1 else ""
-        out.append(f"{cmd}  # {tail}")
+def matched_commands(rec, words):
+    """The command lines a lookup printed whose text or status comment
+    contains every word, in printed order, once each."""
+    lines, out = printed_of(rec), []
+    for i, cmd in enumerate(lines):
+        if cmd[:1] in ("#", " ", "") or cmd in out:
+            continue
+        note = status_note(lines[i + 1]) if i + 1 < len(lines) else ""
+        if has_words(cmd + "\n" + note, words):
+            out.append(cmd)
     return out
 
 
@@ -2038,10 +2034,8 @@ def main():
     fd.add_argument("--debug", action="store_true", help="scores to stderr")
     fd.add_argument("guesses", nargs="*", help="the model's guessed commands")
     lg = sub.add_parser("log")
-    lg.add_argument("--printed", action="store_true",
-                    help="grep the printed commands instead of the questions")
-    lg.add_argument("-n", "--last", type=int, default=10, help="last N matching lines")
-    lg.add_argument("-c", "--count", action="store_true", help="print the number of matching lines")
+    lg.add_argument("-n", "--last", type=int, default=10, help="last N matching lookups")
+    lg.add_argument("-c", "--count", action="store_true", help="print the number of matching lookups")
     lg.add_argument("-s", "--show", type=int, metavar="N", help="the full entry number N")
     lg.add_argument("-d", "--delete", metavar="N[,N|N-M]...",
                     help="delete entries (their numbers stay unused)")
@@ -2187,13 +2181,14 @@ def main():
             sys.exit(0)
         if args.last < 1:
             sys.exit("hintdb: --last needs a number of 1 or more")
-        lines = log_search(args.words) if args.printed else log_history(args.words)
+        # A quoted phrase is several words, all of which must match.
+        entries = log_history([w for a in args.words for w in a.split()])
         if args.count:
-            print(len(lines))
+            print(len(entries))
         else:
-            for line in lines[-args.last:]:
-                print(line)
-        sys.exit(0 if lines else 1)
+            for entry in entries[-args.last:]:
+                print("\n".join(entry))
+        sys.exit(0 if entries else 1)
     elif args.op == "query":
         if not args.no_update:
             update()
