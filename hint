@@ -163,15 +163,22 @@ keys_help() {
   printf '  %s, Ctrl-C cancels. %s.\n' "$1" "$other" >&2
 }
 
+# not_found_note   the last question is not in the history file, so the
+# newest line is offered instead of one after the question.
+not_found_note() {
+  echo "  (your last question is not in your history file: this is your newest command)" >&2
+}
+
 # answer [TOOL]   save the last command (or the last TOOL command) in the
 # history file as the answer to the last question, after the user confirms
 # or edits it. hintdb picks both; nothing is saved without the prompt.
 answer() {
-  local cand n q cmd line
+  local cand n q where cmd line
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
   cand=$(hintdb answer -- "$@") || exit 1
-  { IFS=$'\t' read -r n q; IFS= read -r cmd; } <<<"$cand"
+  { IFS=$'\t' read -r n q where; IFS= read -r cmd; } <<<"$cand"
   printf 'answer to %s "%s":\n' "$n" "$q" >&2
+  [ "$where" = after ] || not_found_note
   keys_help "Enter saves" answer $#
   edit_line "$cmd" saved
   hintdb answer --save -q "$q" -- "$line"
@@ -181,10 +188,16 @@ answer() {
 # (or the last TOOL command), as edited, so the user can delete them.
 # Read-only: nothing is changed.
 forget() {
-  local cmd line
+  local cand n q where cmd line
   command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
-  cmd=$(hintdb forget -- "$@") || exit 1
-  echo "which command?" >&2
+  cand=$(hintdb forget -- "$@") || exit 1
+  { IFS=$'\t' read -r n q where; IFS= read -r cmd; } <<<"$cand"
+  if [ "$where" = after ]; then
+    printf 'which command? the first after "hint %s":\n' "$q" >&2
+  else
+    echo "which command?" >&2
+    [ -n "$q" ] && not_found_note
+  fi
   keys_help "Enter lists where it is" forget $#
   edit_line "$cmd" changed
   hintdb forget --where -- "$line"

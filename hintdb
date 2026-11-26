@@ -1650,13 +1650,34 @@ def line_tools(cmd):
     return [os.path.basename(w) for w in split_cmd(norm(spaced_ops(cmd)))[0].split()]
 
 
+def question_line(lines, query):
+    """Index of the last history line that asked QUERY (`hint WORDS` whose
+    words, split as the shell does, join to the logged question), or None."""
+    want = norm(query)
+    for i in range(len(lines) - 1, -1, -1):
+        cmd = split_comment(lines[i])[0]
+        if not cmd.startswith("hint"):
+            continue
+        try:
+            words = shlex.split(cmd)
+        except ValueError:      # unbalanced quotes
+            continue
+        if words and words[0] == "hint" and norm(" ".join(words[1:])) == want:
+            return i
+    return None
+
+
 def pick_line(tool="", verb="answer"):
-    """((last lookup or None, command), None) or (None, error message).
-    The command is the newest line of the live history: with TOOL, the
-    newest line where any command is TOOL; without, the newest line that is
-    not trivial and not only history housekeeping. Lines that run hint are
-    always skipped (the `hint answer` line itself). When there is a last
-    lookup, the history file must have been written since."""
+    """((last lookup or None, command, anchored), None) or (None, error).
+    When the last question is found in the live history, only the lines after
+    it count, and the pick is the first of them for forget (the suggestion
+    tried right after asking) and the last for answer (the one that finally
+    worked): with TOOL the first/last line where any command is TOOL,
+    without it the first/last line that is not trivial. Lines that run hint
+    are always skipped. When the question is not in the file (asked in
+    another terminal, quotes shlex cannot split), the newest line, skipping
+    also history housekeeping, as before (anchored False). When there is a
+    last lookup, the history file must have been written since."""
     recs = read_log()
     rec = recs[-1] if recs else None
     hist = live_history()
@@ -1674,7 +1695,15 @@ def pick_line(tool="", verb="answer"):
         again = f"hint {verb}" + (f" {tool}" if tool else "")
         return None, (f"your history file has not been written since you asked\n"
                       f"  \"{rec['query']}\"; run:  history -a; {again}")
-    for line in reversed(lines):
+    start = question_line(lines, rec["query"]) if rec else None
+    anchored = start is not None
+    if anchored:
+        span = lines[start + 1:]
+        if verb == "answer":
+            span = span[::-1]
+    else:
+        span = lines[::-1]
+    for line in span:
         if re.fullmatch(r"#\d{9,11}", line):   # HISTTIMEFORMAT stamp lines
             continue
         cmd = split_comment(line)[0]
@@ -1685,11 +1714,23 @@ def pick_line(tool="", verb="answer"):
             continue
         if tool:
             if tool in tools:
-                return (rec, cmd), None
-        elif tools and not set(tools) <= HOUSEKEEPING and not is_trivial(norm(cmd)):
-            return (rec, cmd), None
+                return (rec, cmd, anchored), None
+        elif (tools and not is_trivial(norm(cmd))
+              and (anchored or not set(tools) <= HOUSEKEEPING)):
+            return (rec, cmd, anchored), None
     what = f"no {tool} command" if tool else "no command"
+    if anchored:
+        return None, f"{what} since you asked \"{rec['query']}\""
     return None, f"{what} found in {tilde(hist)}"
+
+
+def print_pick(res):
+    """For hint: `NUM<TAB>QUESTION<TAB>after|newest`, then the command.
+    NUM and QUESTION are empty when there is no lookup yet."""
+    rec, cmd, anchored = res
+    n, q = (rec["n"], rec["query"]) if rec else ("", "")
+    print(f"{n}\t{q}\t{'after' if anchored else 'newest'}")
+    print(cmd)
 
 
 def answer_candidate(tool=""):
@@ -1874,16 +1915,14 @@ def main():
         res, err = pick_line(args.words[0] if args.words else "", "forget")
         if err:
             sys.exit("hintdb: " + err)
-        print(res[1])
+        print_pick(res)
     elif args.op == "answer":
         if len(args.words) > 1:
             sys.exit("hintdb: answer takes at most one TOOL")
         res, err = answer_candidate(args.words[0] if args.words else "")
         if err:
             sys.exit("hintdb: " + err)
-        rec, cmd = res
-        print(f"{rec['n']}\t{rec['query']}")
-        print(cmd)
+        print_pick(res)
     elif args.op == "rebuild":
         report(update(force=True))
     elif args.op == "update":

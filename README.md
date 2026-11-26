@@ -167,13 +167,14 @@ hint it was the answer:
 hint answer
 ```
 
-hint shows your last question and your last command, on a line you can
-edit. Press Enter to save it, or Ctrl-C to cancel. The question is saved as
+hint shows your last question and the last command you ran after it, on a
+line you can edit. Press Enter to save it, or Ctrl-C to cancel. The question is saved as
 a comment on the command, so the next similar question finds it, even if
 the model guesses the wrong tool again.
 
-If you ran other commands after it, name the command's tool instead. This
-takes the last line that runs `ss`, also inside a pipeline:
+If you ran other commands after the right one, name its tool instead. This
+takes the last line since your question that runs `ss`, also inside a
+pipeline:
 
 ```bash
 hint answer ss
@@ -194,13 +195,14 @@ question` line each. To change or remove one, edit that file.
 
 A wrong command that looks right, such as `history -n 10` (`-n` takes no
 count), keeps coming back: each time you run it, it is in your history
-once more. To find every copy, run this after the wrong command:
+once more. To find every copy, run this after trying it; hint takes the
+first command you ran after your last question:
 
 ```bash
 hint forget
 ```
 
-Or name its tool, then edit the line to the exact command:
+Or name its tool, to take the first line since your question that runs it:
 
 ```bash
 hint forget history

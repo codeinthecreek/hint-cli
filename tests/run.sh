@@ -799,7 +799,8 @@ printf '%s\n' '{"time": "2026-11-01T09:00:00", "query": "older question", "print
 A() { HISTFILE="$ah" HINTDB_LOG="$alog" "$@"; }
 
 out=$(A hintdb answer 2>&1)
-line "answer: the last question, with its number" "$out" 1 "$(printf '2\twho is listening on port 8080')"
+line "answer: the last question, with its number; not in history: newest" "$out" 1 \
+  "$(printf '2\twho is listening on port 8080\tnewest')"
 line "answer: last command, skipping hint, history housekeeping and trivial lines" "$out" 2 \
   "ps aux | grep nginx"
 out=$(A hintdb answer fakess 2>&1)
@@ -938,6 +939,47 @@ printf '%s\n' 'nmcli connection delete home' > "$reply"
 hint forget a wifi network >/dev/null 2>&1
 has "forget + more words is a question" "$(jq -r '.messages[-1].content' <"$tmp/request")" \
   "forget a wifi network"
+
+echo "== answer and forget after the question"
+# The question is in the history: only the lines after it count. forget
+# takes the first (the suggestion tried), answer the last (what worked).
+qh="$tmp/question-history" qlog="$tmp/question-log.jsonl"
+printf '%s\n' 'fakess -x old' 'hint show me the last history items' 'history -n 10' 'man history' \
+  'fc -ln -10' 'history --help' 'hint forget' > "$qh"
+printf '%s\n' '{"time": "2026-11-02T09:00:00", "query": "show me the last history items", "printed": []}' > "$qlog"
+Q() { HISTFILE="$qh" HINTDB_LOG="$qlog" HINTDB_SOURCES="$tmp/forget-sources" \
+      HINTDB_ANSWERS="$tmp/forget-answers" HINTDB_DB="$tmp/forget.db" "$@"; }
+out=$(Q hintdb forget 2>&1)
+line "forget: found the question" "$out" 1 "$(printf '1\tshow me the last history items\tafter')"
+line "forget: the first line after the question (history lines count now)" "$out" 2 "history -n 10"
+line "forget TOOL: the first TOOL line after the question" "$(Q hintdb forget history 2>&1)" 2 "history -n 10"
+line "forget TOOL: another tool" "$(Q hintdb forget fc 2>&1)" 2 "fc -ln -10"
+line "answer: the last line after the question, trivial ones skipped" "$(Q hintdb answer 2>&1)" 2 "fc -ln -10"
+line "answer TOOL: the last TOOL line after the question" "$(Q hintdb answer history 2>&1)" 2 "history --help"
+out=$(Q hintdb forget fakess 2>&1)
+status "forget TOOL only before the question: exit 1" 1 $?
+has "forget TOOL only before the question: not looked for there" "$out" \
+  'no fakess command since you asked "show me the last history items"'
+printf '%s\n' 'echo before' 'hint show me the last history items' > "$tmp/q-only"
+out=$(HISTFILE="$tmp/q-only" HINTDB_LOG="$qlog" hintdb answer 2>&1)
+status "answer: nothing run since the question: exit 1" 1 $?
+has "answer: nothing run since the question: says so" "$out" "no command since you asked"
+printf '%s\n' "hint 'what is' \"the  thing\"" 'fakess -q' > "$tmp/q-quoted"
+printf '%s\n' '{"time": "2026-11-02T09:00:00", "query": "what is the  thing", "printed": []}' > "$tmp/q-quoted-log"
+line "the question found through the shell's quoting" \
+  "$(HISTFILE="$tmp/q-quoted" HINTDB_LOG="$tmp/q-quoted-log" hintdb forget 2>&1)" 1 \
+  "$(printf '1\twhat is the  thing\tafter')"
+line "the last asking of the question counts" \
+  "$(printf '%s\n' 'hint show me the last history items' 'fakess -a' 'hint show me the last history items' 'fakess -b' > "$tmp/q-twice"; \
+     HISTFILE="$tmp/q-twice" HINTDB_LOG="$qlog" hintdb forget 2>&1)" 2 "fakess -b"
+out=$(Q hint forget 2>&1 </dev/null)
+has "hint forget: says it starts after the question" "$out" \
+  'which command? the first after "hint show me the last history items":'
+out=$(printf '\n' | F hint forget 2>&1)
+lacks "hint forget: no question in the log, no note" "$out" "not in your history file"
+out=$(printf '\n' | A hint answer 2>&1)
+has "hint answer: question not in history: says the newest is offered" "$out" \
+  "(your last question is not in your history file: this is your newest command)"
 
 echo
 echo "$pass passed, $fail failed"

@@ -638,18 +638,36 @@ Agreed and built 2026-11-26.
   unquoted `;`, `|` or `&` also separates when it touches a word: the
   index's tokens keep `-a;` whole, so `history -a;hint answer` was not
   seen as running `hint` (found by the tests). The index is unchanged.
+  - **After the question** (changed 2026-11-26, from real use): only the
+    lines after the question's own `hint` line count. The question is the
+    last line whose words, split as the shell does (`shlex`), are `hint`
+    followed by the logged question (hint logs `"$*"`, so quotes and
+    spacing do not matter). `hint answer` takes the **last** of those lines
+    (what finally worked), `hint forget` the **first** (the suggestion run
+    right after asking). Nothing run since the question: says so, exit 1;
+    lines from before the question are never offered.
+    Why: the first version took the newest line anywhere, skipping
+    `history`/`fc` lines (so the `history -a` typed before `hint answer`
+    was not taken). In real use, after `hint show me the last history
+    items`, `history -n 10` (wrong), `man history`, `history --help`, plain
+    `hint forget` skipped every history line and offered `docker stop ...`
+    from before the question, and `hint forget history` offered `history
+    --help`. Matching the question's line was first rejected as fragile;
+    splitting it as the shell does makes it reliable.
   - Always skipped: lines that run `hint` (the `hint answer` line itself,
-    in case `history -a` wrote it; not checked on a real terminal).
-  - `hint answer`: the newest line that is not trivial by the index's rule
-    (`cd /etc`, `ls`) and not made only of `history` and `fc` commands
-    (housekeeping such as `history -a`).
-  - `hint answer TOOL`: the newest line in which any command is TOOL, with
-    nothing else skipped: naming the tool means that tool is wanted, so
-    `hint answer history` finds `history -d 1234` and `hint answer grep`
-    finds `ps aux | grep nginx`.
-  - No limit on how far back: an older match is shown at the prompt and
-    cancelled. Stopping at the question's own `hint` line in the file was
-    not taken: finding it means matching the typed line, quotes and all.
+    in case `history -a` wrote it; not checked on a real terminal), and,
+    without TOOL, trivial lines by the index's rule (`cd /etc`, `man
+    history`). History and `fc` lines count: `history -n 10` and `fc -ln
+    -10` are lines one forgets or answers with, and the `history -a` before
+    `hint answer` is on the same line as hint or comes after the answer.
+  - With TOOL: the last (answer) or first (forget) line after the question
+    in which any command is TOOL, with nothing else skipped: naming the
+    tool means that tool is wanted, so `hint answer history` finds
+    `history -d 1234` and `hint answer grep` finds `ps aux | grep nginx`.
+  - **Question not in the file** (asked in another terminal, or quotes
+    `shlex` cannot split): the newest line anywhere, skipping also lines
+    made only of `history` and `fc` commands, as in the first version. The
+    prompt says the question was not found and this is the newest command.
 - **Prompt:** the question, then the command on an editable line (`read -e
   -i` from the terminal), so a typo or a one-off value can be fixed before
   saving. Enter saves, Ctrl-C or an empty line cancels. A line under the
@@ -706,11 +724,13 @@ Agreed and built 2026-11-26.
   options would not.
 - **Form:** `hint forget [TOOL]`, parsed like `hint answer`: a command when
   at most one plain word follows, a question with two or more.
-- **Picking the line:** as for `hint answer` (the newest line of the live
-  history, or the newest TOOL line; lines that run `hint` skipped; without
-  TOOL also trivial and housekeeping lines), including the check that the
-  history file was written since the last lookup, when there is one. No
-  question is needed. The line is shown on an editable line, only to choose
+- **Picking the line:** as for `hint answer` (see "Which line"), but the
+  **first** line after the last question, or the first TOOL line: the
+  suggestion that looked right and was run right after asking. Also the
+  check that the history file was written since the last lookup, when there
+  is one. A question is not required: with none in the log, or none found
+  in the file, the newest line is offered. The prompt says where it
+  started: `which command? the first after "hint QUESTION":`. The line is shown on an editable line, only to choose
   it: so `hint forget history` plus an edit reaches a line that was not run
   this time. Enter lists it; an empty line or Ctrl-C cancels. Nothing is
   saved either way.
