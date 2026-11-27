@@ -283,7 +283,8 @@ hint flags 'sudo lsof -i -P -n | grep LISTEN'
 Each command of the pipeline is explained in turn. A grouped `-tuln` is read
 one letter at a time, as the tool itself reads it, and a flag's value
 (`-n 10`, `-u postgres`) is not looked up. A flag the page doesn't list says
-`not in nc(1)`; nothing is guessed.
+`not in nc(1)`; nothing is guessed. Like grep, `hint flags` exits 1 when a
+flag or a page was not found, and 0 when every flag was.
 
 ### Past lookups
 

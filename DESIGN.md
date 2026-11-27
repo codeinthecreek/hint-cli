@@ -984,7 +984,11 @@ git-commit, kubectl-get, curl, rsync, journalctl, dig, find, ...).
   the flag's line; GNU pages put it on deeper lines, generated pages
   (kubectl-get) at the same indent. A hyphen at a line end is kept as a
   real one (`go-` + `template`). Shown cut after 4 lines, with `...`.
-  Three layouts were seen on the real pages; nothing more is special-cased.
+  A spec that is one bracketed list, as unzip and zipinfo write their
+  options (`[-d exdir]`), is read as that list (the author's choice,
+  2026-11-27; no other page among 600 in man1 does this). Option lines
+  longer than the column are printed whole on their own line (ffmpeg,
+  ssh `-L`), as the page writes them (the author's choice).
   - `--name=value` is looked up as `--name`;
   - `-tuln` that is not in the page itself is read as getopt reads it:
     `-t -u -l -n`, and a letter that takes a value takes the rest of the
@@ -1017,7 +1021,10 @@ git-commit, kubectl-get, curl, rsync, journalctl, dig, find, ...).
   (`grep LISTEN`) is printed with nothing under it, so it is clear it was
   not skipped. A flag not found says so: `-x: not in nc(1)`. A tool with
   no page: `kubectl: no man page or builtin help here`. Nothing is
-  guessed.
+  guessed. Exit status as grep's (the author's choice, 2026-11-27): 1 when
+  a flag or a page was not found, 0 when every flag was (a command with no
+  flags is not a miss). A 1 can also be a page layout the reader does not
+  know, so it does not prove a flag is made up.
 - **Not part of a lookup:** it reads no index, writes no query log entry,
   and does not change plain `hint` output.
 - **Not taken:**

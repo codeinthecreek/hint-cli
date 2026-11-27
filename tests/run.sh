@@ -1156,7 +1156,7 @@ echo "== hint flags"
 FL() { HINTDB_MAN="$here/fake_doc.sh $fix/man" HINTDB_HELP="$here/fake_doc.sh $fix/help" hint flags "$@"; }
 
 out=$(FL ss -tuln)
-status "flags: exit 0" 0 $?
+status "flags: every flag found: exit 0" 0 $?
 line "flags: GNU layout, the flag line as the page writes it" "$out" 1 "ss -t, --tcp        Show TCP sockets."
 line "flags: a group is split as getopt does, in the order typed" "$out" 4 \
   "ss -n, --numeric    Show numbers, do not resolve service names."
@@ -1202,6 +1202,10 @@ has "flags: an optional [value] does not take the next word" "$out" "lsof -P    
 has "flags: a + option listed on the page" "$out" "lsof +D D    searches for open files"
 out=$(FL find . -mtime +30)
 lacks "flags: a + word not on the page is not listed" "$out" "+30"
+out=$(FL unzip -l -d out a.zip)
+has "flags: a bracketed option line, as unzip writes it" "$out" "unzip -d exdir  Extract the files into the directory exdir."
+lacks "flags: the bracketed option's value is not looked up" "$out" "unzip out"
+has "flags: unzip's plain option lines still found" "$out" "unzip -l        List the archive's files."
 out=$(FL dig +short example.org)
 has "flags: dig +short" "$out" "dig +short, +noshort  This option toggles a terse answer."
 out=$(FL history -n 10)
@@ -1209,10 +1213,13 @@ has "flags: a builtin's help" "$out" "history -n  read all history lines not alr
 out=$(FL history -x)
 has "flags: a flag not in the builtin's help" "$out" "history -x  not in help history"
 out=$(FL ss -e)
+status "flags: a flag not on the page: exit 1" 1 $?
 has "flags: a flag not on the page says so, with the page" "$out" "ss -e  not in ss(8)"
 out=$(FL nosuchtool -a)
+status "flags: no page: exit 1" 1 $?
 has "flags: no page, no help" "$out" "nosuchtool  no man page or builtin help here"
 out=$(FL 'ss -t | grep LISTEN')
+status "flags: a command with no flags is not a miss: exit 0" 0 $?
 line "flags: a command with no flags is listed, not skipped" "$out" 3 "grep          no flags"
 FL >/dev/null 2>&1
 status "flags alone: usage, exit 2" 2 $?

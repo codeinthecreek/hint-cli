@@ -2053,10 +2053,15 @@ def doc_page(name, builtin=True):
 
 
 def option_head(line):
-    """(flag spec, description start, takes_value) when LINE starts an option
-    entry, else None. The spec is the part before the gap: comma-separated
-    items that all start with `-`, such as `-u user, --user=user`."""
+    """(flags, spec, description start, takes_value) when LINE starts an
+    option entry, else None. The spec is the part before the gap:
+    comma-separated items that all start with `-`, such as `-u user,
+    --user=user`, or one bracketed list of them, as unzip writes its
+    options (`[-d exdir]`)."""
     s = line.strip()
+    m = re.match(r"\[([-+][^][]*)\](?=$|\t| {2})", s)
+    if m:
+        s = m.group(1) + s[m.end():]
     if s[:1] not in ("-", "+") or s[:2] in ("- ", "+ ") or s in ("-", "--", "+"):
         return None
     parts = FLAG_GAP.split(s, 1)
@@ -2201,8 +2206,9 @@ def explain_command(words):
 
 
 def flags_report(args):
-    """Lines explaining every flag of the command(s) in ARGS. One argument is
-    read as a command line (quoted pipelines); several are its words."""
+    """(lines explaining every flag of the command(s) in ARGS, whether
+    anything was not found). One argument is read as a command line (quoted
+    pipelines); several are its words."""
     if len(args) == 1:
         lex = shlex.shlex(args[0], posix=True, punctuation_chars=True)
         lex.whitespace_split = True
@@ -2229,8 +2235,9 @@ def flags_report(args):
             if nxt is None:
                 break
             seg = seg[nxt:]
-    rows = []
+    rows, missing = [], False
     for tool, label, entries in groups:
+        missing = missing or label is None or any(d is None for _, d in entries)
         if label is None:
             rows.append((tool, "no man page or builtin help here"))
         elif not entries:
@@ -2255,7 +2262,7 @@ def flags_report(args):
         else:
             out.append(left.ljust(width) + wrap[0])
             out += [" " * width + t for t in wrap[1:]]
-    return out
+    return out, missing
 
 
 # ---------------------------------------------------------------- cli
@@ -2382,7 +2389,9 @@ def main():
         words = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not words:
             sys.exit("hintdb: flags needs a command, e.g. hintdb flags -- ss -tuln")
-        print("\n".join(flags_report(words)))
+        lines, missing = flags_report(words)
+        print("\n".join(lines))
+        sys.exit(1 if missing else 0)             # like grep: 1 = something not found
     elif args.op == "rebuild":
         report(update(force=True))
     elif args.op == "update":
