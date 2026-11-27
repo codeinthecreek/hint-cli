@@ -632,9 +632,12 @@ same day to `hint remember`, which pairs with `hint forget` and says what
 it does (the author). The file and `HINTDB_ANSWERS` keep their name: they hold
 answers to questions.
 
-- **Purpose:** when a lookup missed and the user found the command some
-  other way, `hint remember` saves the question as a comment on that
-  command, so the next similar question finds it. A wrong tool guess was
+- **Purpose:** once the user has run the command that answers the
+  question (one hint printed, one they changed, or one found some other
+  way), `hint remember` saves the question as a comment on that command,
+  so the next similar question finds it first. Not only for misses (the
+  author, 2026-11-27): the usual case is a lookup that led to the answer
+  without printing it first. A wrong tool guess was
   behind most misses (26 of 30, 2026-11-18); with the question's words on
   the user's row, the row is found even when the model guesses the same
   wrong tool again. It works like a `# comment` the user writes in
