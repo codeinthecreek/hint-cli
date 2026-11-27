@@ -1276,7 +1276,11 @@ def score_rows(con, text, guesses, dbg):
     for t in tool_w:
         cand |= {r for (r,) in con.execute(
             "SELECT rowid FROM entries WHERE cmdword = ?", (t,))}
-    gtot = sum(idf[w] for w in gwords) or 1
+    # A guess word found in no row's searched columns (a made-up name,
+    # `x1080` from 1920x1080, or a word only in the data column when no path
+    # is mentioned) can't count for any row; in the total it would only lower
+    # every row's share alike, so it is left out.
+    gtot = sum(idf[w] for w in gwords if found[w]) or 1
     scored = []
     for rid in cand:
         display, examples, dnote, shp, count, kind, sources, cmdword = con.execute(
@@ -1342,6 +1346,9 @@ def find(text, guesses, debug=False, rows=None):
 
         dbg(f"words: {terms}" + ("  (path mentioned: values searched too)" if paths else ""))
         dbg(f"guessed tools: {tools}  guess words: {gwords}")
+        unfound = [w for w in gwords if not r["found"][w]]
+        if unfound:
+            dbg(f"guess words not found in the searched columns (not counted): {unfound}")
         dbg(f"{len(scored)} candidate rows" + (", top:" if scored else ""))
         if scored:
             dbg("   score   bm25 tool flags gwords  uses   command")

@@ -384,7 +384,7 @@ has "--debug shows the a-b reading" "$err" "guessed tool fakedock-compose also r
 
 err=$(hintdb find --debug -q "search ignoring case" "grep -ri todo src" 2>&1 >/dev/null)
 has "bundled short flags compared letter by letter (-ri as -r -i)" "$err" \
-  "1.0  1.00   0.26  x1      grep -r -i TODO src"
+  "1.0  1.00   1.00  x1      grep -r -i TODO src"
 err=$(hintdb find --debug -q "list files by name" "find . -name x.log -mtime +7" 2>&1 >/dev/null)
 has "find -name stays whole; +N values are not flags (2 of 3 flags)" "$err" \
   "1.0  0.67   0.00  x1      find . -name \"*.log\" -mtime +30 -delete"
@@ -575,6 +575,13 @@ out=$(hint how do I set the screen resolution 2>&1)
 has "guessed tool finds the user's row with none of the question's words" "$out" \
   "xrandr --output HDMI-1 --mode 2560x1440"
 has "the guess is shown as a model suggestion" "$out" "xrandr -s 1920x1080"
+# `x1080` (from 1920x1080) is on no row: it is left out of the guess-word
+# total, so the xrandr row gets the whole guess-word share (it had 0.45).
+err=$(HINT_DEBUG=1 hint how do I set the screen resolution 2>&1 >/dev/null)
+has "a guess word on no row is named in --debug" "$err" \
+  "guess words not found in the searched columns (not counted): ['x1080']"
+has "a guess word on no row does not lower the rows' guess-word share" "$err" \
+  "1.0  0.00   1.00  x3      xrandr --output HDMI-1 --mode 2560x1440"
 : > "$reply"
 
 out=$(hint zzqq frobnicate 2>&1)
