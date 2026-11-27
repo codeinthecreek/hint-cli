@@ -201,8 +201,10 @@ asking the model.
 
 ### Remember
 
-When a lookup missed, `hint remember` takes the last question from the log and
-your last command from your history file, and after you confirm it appends
+Once you have run the command that answers your question (one hint printed,
+one you changed, or one you found elsewhere), `hint remember` takes the last
+question from the log and the last command you ran after it from your
+history file, and after you confirm it appends
 `command  # question` to the answers file. That file is read like history,
 so the question becomes a comment on your command's row, and the next
 similar question finds it by its words.
