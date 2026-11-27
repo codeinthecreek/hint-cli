@@ -7,6 +7,7 @@
 #   hint remember [TOOL]         save the command that answered the last question
 #   hint forget [TOOL]         mark a wrong command, so hint never shows it
 #   hint flags nc -l 4567      what each flag does, from help or the man page
+#   hint man nc connect to port  forms for a task from nc's tldr and man pages
 #
 # 1. An LLM (Ollama chat API) guesses 1-3 commands for the request.
 # 2. hintdb find looks up the user's own history/notes rows for the request,
@@ -55,6 +56,8 @@ usage: hint <what you want to do>
        hint flags COMMAND...           what each flag of COMMAND does, from
                                        the builtin's help or the man page;
                                        quote a pipeline: hint flags 'a -x | b -y'
+       hint man TOOL WORDS...          forms for a task from TOOL's tldr page,
+                                       man page examples and options
        hint -h, --help                 this help
 For several words, quote them:  hint grep "ssh key"
 Unquoted, a second word makes the line a question for the model instead:
@@ -253,6 +256,11 @@ case "$1" in
       case "${2:-}" in -?*) usage ;; esac
       op=$1; shift; "$op" "$@"; exit $?
     fi ;;
+  # man: always the command; TOOL and at least one word to search for.
+  man)
+    [ $# -ge 3 ] || usage
+    command -v hintdb >/dev/null || { echo "hint: hintdb not found in PATH" >&2; exit 1; }
+    shift; hintdb man -- "$@"; exit $? ;;
   # flags: always the command; the words after it are the command to explain.
   flags)
     [ $# -ge 2 ] || usage

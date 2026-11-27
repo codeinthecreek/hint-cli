@@ -35,6 +35,9 @@ DB, because dedup is global across sources.
                                                      COMMAND (nothing is changed)
   hintdb forget --save [--reason R] -- COMMAND       mark COMMAND WRONG in the
                                                      wrong file (used by hint forget)
+  hintdb man -- TOOL WORDS...                        TOOL's tldr examples, man page
+                                                     examples and options for WORDS
+                                                     (used by hint man)
   hintdb flags -- COMMAND...                         what each flag of COMMAND does,
                                                      from help or its man page
                                                      (used by hint flags)
@@ -2097,9 +2100,13 @@ def find_flag(lines, flag):
         head = option_head(line)
         if head and flag in head[0] and (best is None or indent(line) < best[0]):
             best = (indent(line), i)
-    if best is None:
-        return None
-    ind, i = best
+    return entry_at(lines, best[1]) if best else None
+
+
+def entry_at(lines, i):
+    """The option entry whose option line is lines[i]: (spec, description,
+    takes_value)."""
+    ind = indent(lines[i])
     first = last = i
     while (first > 0 and option_head(lines[first - 1]) and indent(lines[first - 1]) == ind
            and not option_head(lines[first - 1])[2]):
@@ -2265,6 +2272,171 @@ def flags_report(args):
     return out, missing
 
 
+# ---------------------------------------------------------------- man examples
+# `hint man TOOL WORDS`: search one tool's documentation for a task and show
+# the forms it gives: its tldr examples, its man page's example section and
+# its option entries, ranked by bm25 in an in-memory FTS5 table. tldr pages
+# are read from a local cache only: HINTDB_TLDR when set (also for tests),
+# else tealdeer's; never fetched.
+
+TLDR_DIRS = ([os.environ["HINTDB_TLDR"]] if "HINTDB_TLDR" in os.environ
+             else [os.path.expanduser("~/.cache/tealdeer/tldr-pages")])
+EXAMPLE_HEAD = re.compile(r"(USAGE )?EXAMPLES?$")
+
+
+def tldr_root():
+    for d in TLDR_DIRS:
+        for sub in ("pages.en", "pages"):
+            if os.path.isdir(os.path.join(d, sub)):
+                return os.path.join(d, sub)
+    return None
+
+
+def tldr_command(cmd):
+    """A tldr command as a form that is not runnable as printed:
+    {{[-l|--listen]}} -> -l, {{a|b}} -> <a|b>, {{host}} -> host."""
+    cmd = re.sub(r"\{\{\[([^]|]*)\|[^]]*\]\}\}", r"\1", cmd)
+    cmd = re.sub(r"\{\{([^}]*\|[^}]*)\}\}", r"<\1>", cmd)
+    return re.sub(r"\{\{(.*?)\}\}", r"\1", cmd)
+
+
+def tldr_examples(name):
+    """[(command, description)] of NAME's tldr page (common, then linux)."""
+    root = tldr_root()
+    if not root:
+        return []
+    for d in ("common", "linux"):
+        path = os.path.join(root, d, name + ".md")
+        if os.path.isfile(path):
+            out, desc = [], None
+            for line in open(path, errors="replace"):
+                line = line.strip()
+                if line.startswith("- "):
+                    desc = re.sub(r"\[(\w+)\]", r"\1", line[2:].rstrip(":"))  # [c]reate
+                elif line.startswith("`") and line.endswith("`") and desc:
+                    out.append((tldr_command(line[1:-1]), desc))
+                    desc = None
+            return out
+    return []
+
+
+def man_examples(tool, lines):
+    """[(command, description)] from a man page's EXAMPLES section. Two
+    layouts: a description with the command indented below it (`$ nc -u
+    host 53`), or the command with its description indented below (ss).
+    Lines starting with `$ ` or the tool's name are commands."""
+    start = next((i for i, l in enumerate(lines) if EXAMPLE_HEAD.match(l.strip())
+                  and indent(l) < 4), None)
+    if start is None:
+        return []
+
+    def is_cmd(text):
+        return text.startswith("$ ") or text.split()[0] in (tool, "sudo")
+
+    blocks, blank = [], True                      # [indent, after_blank, is_cmd, [text]]
+    for line in lines[start + 1:]:
+        if line.strip() and indent(line) == 0:    # the next section
+            break
+        if not line.strip():
+            blank = True
+            continue
+        t, ind = line.strip(), indent(line)
+        if blocks and blocks[-1][2] and blocks[-1][3][-1].endswith("\\"):
+            blocks[-1][3][-1] = blocks[-1][3][-1][:-1].rstrip() + " " + t   # `\` continues
+        elif blocks and not blank and blocks[-1][0] == ind and blocks[-1][2] == is_cmd(t):
+            blocks[-1][3].append(t)
+        else:
+            blocks.append([ind, blank, is_cmd(t), [t]])
+        blank = False
+    out = []
+    for k, (ind, after_blank, cmd, texts) in enumerate(blocks):
+        if not cmd:
+            continue
+        above, m = [], k - 1                      # the paragraph above, less indented
+        while m >= 0 and not blocks[m][2]:
+            above[:0] = blocks[m][3]
+            if blocks[m][1]:
+                break
+            m -= 1
+        below, m = [], k + 1                      # or the lines right below, deeper
+        while (m < len(blocks) and not blocks[m][2] and not blocks[m][1]
+               and blocks[m][0] > ind):
+            below += blocks[m][3]
+            m += 1
+        if below:
+            desc = below
+        elif above and blocks[k - 1][0] < ind:
+            desc = above
+        else:
+            continue
+        desc = re.sub(r"(^|\s)\*\s+", r"\1", " ".join(" ".join(desc).split())).rstrip(":")
+        cmds = [t[2:] if t.startswith("$ ") else t for t in texts]
+        own = [c for c in cmds if c.split()[0] in (tool, "sudo")]
+        out += [(c, desc) for c in own or cmds]
+    return out
+
+
+TLDR_NOTE = ("# no tldr pages here: install tealdeer (or another tldr client) and run "
+             "tldr --update for more forms (https://github.com/tldr-pages/tldr)")
+
+
+def man_search(tool, words):
+    """Lines answering `hint man TOOL WORDS`, and whether anything matched.
+    A subcommand page (git-commit for `git commit ...`) is read first."""
+    rest = list(words)
+    names = [tool]
+    sub = f"{tool}-{rest[0]}" if rest else None
+    if sub and (doc_page(sub, builtin=False)[0] or tldr_examples(sub)):
+        names.insert(0, sub)
+        rest = rest[1:]
+    terms = [t for t in query_terms(" ".join(rest)) if t != tool]   # on every passage
+    passages = []                                 # (rank, form, note)
+    for name in names:
+        for cmd, desc in tldr_examples(name):
+            passages.append((0, cmd, "tldr: " + desc, desc + " " + cmd))
+        label, lines = doc_page(name, builtin=(name == tool))
+        if not lines:
+            continue
+        label = label if label.startswith("help ") else "man " + label
+        for cmd, desc in man_examples(tool, lines):
+            passages.append((0, cmd, f"{label} example: {desc}", desc + " " + cmd))
+        for i, line in enumerate(lines):
+            head = option_head(line)
+            prev = option_head(lines[i - 1]) if i else None
+            stacked = prev and not prev[2] and indent(lines[i - 1]) == indent(line)
+            if head and indent(line) < 16 and not stacked:   # a stack is one entry
+                e = entry_at(lines, i)
+                if e and e[1]:
+                    flag = min(head[0], key=len)
+                    passages.append((1, f"{tool} {flag}", f"{label} {flag}: {e[1]}",
+                                     e[0] + " " + e[1]))
+    if not terms or not passages:
+        return ([TLDR_NOTE] if not tldr_root() else []), False
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE VIRTUAL TABLE p USING fts5(body, tokenize = 'porter unicode61')")
+    con.executemany("INSERT INTO p(rowid, body) VALUES (?, ?)",
+                    [(k, p[3]) for k, p in enumerate(passages)])
+    q = " OR ".join('"%s"' % t.replace('"', "") for t in terms)
+    hits = con.execute("SELECT rowid, bm25(p) FROM p WHERE p MATCH ?", (q,)).fetchall()
+    hits.sort(key=lambda h: (passages[h[0]][0], h[1]))   # examples before option entries
+    out, seen, shown, example = [], set(), [0, 0], False
+    for rowid, _ in hits:                         # up to 3 examples, then 2 option entries
+        kind, form, note, _ = passages[rowid]
+        if form in seen or shown[kind] == (3, 2)[kind]:
+            continue
+        seen.add(form)
+        shown[kind] += 1
+        example = example or kind == 0
+        if len(note) > 110:
+            note = note[:106].rsplit(" ", 1)[0] + " ..."
+        out += [form, "  # " + note]
+        if len(seen) == 5:
+            break
+    if not example and not tldr_root():           # thin: only option entries, or nothing
+        out.append(TLDR_NOTE)
+    return out, bool(seen)
+
+
 # ---------------------------------------------------------------- cli
 
 
@@ -2316,6 +2488,8 @@ def main():
                     help="append COMMAND  # WRONG! (or # WRONG: REASON) to the wrong file")
     fg.add_argument("--reason", help="with --save")
     fg.add_argument("words", nargs="*", help="TOOL, or with --where/--marked/--save the COMMAND")
+    mn = sub.add_parser("man")
+    mn.add_argument("words", nargs=argparse.REMAINDER, help="TOOL WORDS...")
     fl = sub.add_parser("flags")
     fl.add_argument("command", nargs=argparse.REMAINDER,
                     help="the command's words, or the whole command as one word")
@@ -2385,6 +2559,16 @@ def main():
         if err:
             sys.exit("hintdb: " + err)
         print_pick(res)
+    elif args.op == "man":
+        words = args.words[1:] if args.words[:1] == ["--"] else args.words
+        if len(words) < 2:
+            sys.exit("hintdb: man needs a tool and words, e.g. hintdb man -- nc connect to port")
+        lines, found = man_search(os.path.basename(words[0]), words[1:])
+        if not found:
+            lines.insert(0, f"nothing about \"{' '.join(words[1:])}\" in {words[0]}'s "
+                            "tldr page, man page or help")
+        print("\n".join(lines))
+        sys.exit(0 if found else 1)
     elif args.op == "flags":
         words = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not words:

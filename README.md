@@ -286,6 +286,55 @@ one letter at a time, as the tool itself reads it, and a flag's value
 `not in nc(1)`; nothing is guessed. Like grep, `hint flags` exits 1 when a
 flag or a page was not found, and 0 when every flag was.
 
+### Finding the right form
+
+Once you know the tool but not how to use it for the task, search that
+tool's documentation:
+
+```bash
+hint man nc connect to port
+```
+
+```
+nc host port >received_filename
+  # tldr: Connect to a target listener on the specified port and receive a file from it
+nc -u host.example.com 53
+  # man nc(1) example: Open a UDP connection to port 53 of host.example.com
+nc -x
+  # man nc(1) -x: Connect to destination using a proxy at proxy_address and port. ...
+```
+
+It searches three places, for that tool only, and shows up to 3 examples
+then up to 2 options, best match first:
+
+- the tool's **tldr page**, if you have tldr pages installed (below);
+- the **examples** in its man page;
+- its **options**, from the man page or a builtin's `help`, each shown as
+  `nc -x` with what the option does. An option is a piece of a form, not a
+  whole one, so read its note: nc's `-l` mentions "connection" too, but
+  listens instead of connecting.
+
+A subcommand's page is read first: `hint man git commit amend` reads
+git-commit's pages, then git's. Nothing is run and no model is asked.
+
+**tldr pages** are short, community-written examples of common tasks for
+thousands of tools: [tldr-pages/tldr](https://github.com/tldr-pages/tldr).
+hint reads them from a tldr client's local cache and never downloads them.
+It finds tealdeer's cache (`~/.cache/tealdeer/tldr-pages`) by itself; for
+another client, set `HINTDB_TLDR` to the directory that holds its `pages`
+or `pages.en` folder. Install tealdeer with your package manager, then
+fetch the pages:
+
+```bash
+tldr --update
+```
+
+Without tldr pages, `hint man` searches the man page and help alone, and
+says so when that found only options. In a tldr example, a placeholder
+such as `{{host}}` is shown as `host`, and a choice such as
+`{{--tcp|--udp}}` as `<--tcp|--udp>`, so a pasted form fails instead of
+running something you didn't mean.
+
 ### Past lookups
 
 Every lookup is kept in a local query log, and these commands read it
@@ -351,6 +400,7 @@ hint grep "ssh key"
 | `HINTDB_LOG` | `~/.local/share/hintdb/queries.jsonl` | query log; `/dev/null` turns it off |
 | `HINTDB_ANSWERS` | `~/.local/share/hintdb/answers` | answers saved by `hint remember`; `/dev/null` turns them off |
 | `HINTDB_WRONG` | `~/.local/share/hintdb/wrong` | commands marked by `hint forget`; `/dev/null` turns it off |
+| `HINTDB_TLDR` | tealdeer's cache | a tldr client's cache directory, for `hint man`; set it for another client |
 | `HISTFILE` | `~/.bash_history` | the history `hint remember` reads; export it if yours is elsewhere |
 
 For example, a larger model kept loaded for two hours, with 12 of its layers
@@ -411,6 +461,7 @@ commands from it.
 | `remember [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
 | `forget [TOOL]` | mark the first command after your last question, or the first TOOL command, as wrong, so hint never shows it |
 | `flags COMMAND...` | what each flag of COMMAND does, from the builtin's help or the man page; quote a pipeline |
+| `man TOOL WORDS...` | forms for a task from TOOL's tldr page, man page examples and options |
 
 `--show` and `--delete` stand alone. `hint help` prints the usage; `hint
 help me ...` is a question.
@@ -431,6 +482,7 @@ help me ...` is a question.
 | `hintdb remember [TOOL]` | the last question and the command that answers it (used by `hint remember`) |
 | `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND, and where it is marked |
 | `hintdb forget --save [--reason R] -- COMMAND` | mark COMMAND as wrong (used by `hint forget`) |
+| `hintdb man -- TOOL WORDS...` | TOOL's tldr examples, man examples and options for WORDS (used by `hint man`) |
 | `hintdb flags -- COMMAND...` | what each flag of COMMAND does (used by `hint flags`) |
 | `hintdb query [-n N] WORDS...` | the search for the words alone, with scores (debugging) |
 
