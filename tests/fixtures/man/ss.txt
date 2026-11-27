@@ -20,7 +20,7 @@ OPTIONS
        -p, --processes
               Show the process using each socket.
 
-EXAMPLES
+USAGE EXAMPLES
        ss -t -a
               Text that mentions -l in passing, more indented.
               -l  in an example, deeper than the option list.

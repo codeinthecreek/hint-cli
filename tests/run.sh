@@ -1226,6 +1226,62 @@ status "flags alone: usage, exit 2" 2 $?
 FL fakeflagq -a >/dev/null 2>&1
 lacks "flags: nothing is written to the query log" "$(cat "$HINTDB_LOG" 2>/dev/null)" "fakeflagq"
 
+echo "== hint man"
+# The man and help fixtures above, and a fake tldr cache: nc (common, each
+# placeholder kind) and ss (linux).
+MN() { HINTDB_MAN="$here/fake_doc.sh $fix/man" HINTDB_HELP="$here/fake_doc.sh $fix/help" \
+       HINTDB_TLDR="${TLDR:-$fix/tldr}" hint man "$@"; }
+
+out=$(MN nc connect to a listener and send a file)
+status "man: something found: exit 0" 0 $?
+line "man: a tldr example first, {{x}} printed as x" "$out" 1 "nc host port < path/to/file"
+line "man: the tldr description as the note, [t]arget as target" "$out" 2 \
+  "  # tldr: Connect to a target listener on a port and send it a file"
+out=$(MN nc start a listener)
+has "man: {{[-l|--listen]}} printed as the short spelling" "$out" "nc -l -p port"
+out=$(MN nc scan ports protocol)
+has "man: a choice printed in <>, so it is not a pipeline" "$out" "nc -z <--tcp|--udp> host 1-1000"
+out=$(MN ss sockets listening local port)
+has "man: a linux tldr page" "$out" "ss -lt src :8080"
+out=$(MN nc udp connection port 53)
+has "man: a man example, description above, \$ prompt dropped" "$out" "nc -u host.example.org 53"
+has "man: the man example's note, colon dropped" "$out" \
+  "  # man nc(1) example: Open a UDP connection to port 53 of host.example.org"
+out=$(MN nc wait for a connection happens)
+has "man: description right above, a \\ continuation joined" "$out" "nc -l -p 4567 -v"
+out=$(MN ss display tcp sockets text)
+has "man: command first, description below it (ss layout, USAGE EXAMPLES)" "$out" "ss -t -a"
+out=$(MN nc verbose daemons)
+has "man: option entries as TOOL -FLAG with the entry as note" "$out" "nc -v"
+has "man: option entry note" "$out" "  # man nc(1) -v: Be verbose."
+out=$(MN nc connection port listen udp verbose scan)
+n=$(grep -c '^  # tldr\|^  # man nc(1) example' <<<"$out")
+[ "$n" -le 3 ] && ok "man: at most 3 examples" || bad "man: at most 3 examples" "$out"
+n=$(grep -c '^  # man nc(1) -' <<<"$out")
+[ "$n" -le 2 ] && ok "man: at most 2 option entries" || bad "man: at most 2 option entries" "$out"
+[ "$(grep -n '^  # man nc(1) -' <<<"$out" | head -1 | cut -d: -f1)" -gt \
+  "$(grep -n '^  # tldr\|example' <<<"$out" | tail -1 | cut -d: -f1)" ] \
+  && ok "man: examples before option entries" || bad "man: examples before option entries" "$out"
+out=$(MN history read lines from the history file)
+has "man: a builtin's help options" "$out" "history -n"
+has "man: a builtin's note says help" "$out" "  # help history -n: read all history lines"
+out=$(MN git commit replace the tip)
+has "man: the subcommand page, the subcommand word not searched" "$out" "git --amend"
+out=$(MN nc zzqq frobnicate)
+status "man: nothing found: exit 1" 1 $?
+has "man: nothing found: says so" "$out" "nothing about \"zzqq frobnicate\" in nc's tldr page, man page or help"
+lacks "man: tldr present: no install note" "$out" "no tldr pages here"
+out=$(TLDR="$tmp/no-tldr" MN nc be verbose)
+has "man: no tldr cache, only option entries: the install note" "$out" \
+  "# no tldr pages here: install tealdeer (or another tldr client)"
+has "man: the install note links the tldr project" "$out" "https://github.com/tldr-pages/tldr"
+out=$(TLDR="$tmp/no-tldr" MN nc udp connection port 53)
+lacks "man: no tldr cache, but a man example matched: no note" "$out" "no tldr pages here"
+MN nc >/dev/null 2>&1
+status "man with no words: usage, exit 2" 2 $?
+MN fakemanq connect >/dev/null 2>&1
+lacks "man: nothing is written to the query log" "$(cat "$HINTDB_LOG" 2>/dev/null)" "fakemanq"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

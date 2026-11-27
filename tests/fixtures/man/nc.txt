@@ -18,3 +18,12 @@ OPTIONS
 	 Quit after seconds.
 
      -z	Scan for listening daemons without sending data.
+
+EXAMPLES
+     Open a UDP connection to port 53 of host.example.org:
+
+           $ nc -u host.example.org 53
+
+     Wait for a connection on port 4567 and say what happens:
+           $ nc -l -p 4567 \
+                 -v

@@ -1046,7 +1046,9 @@ git-commit, kubectl-get, curl, rsync, journalctl, dig, find, ...).
 
 ## Man
 
-Proposed 2026-11-26, not built.
+Proposed 2026-11-26, built 2026-11-27 (`hintdb man`, called by `hint man`).
+Checked against the real tldr cache and the example sections of nc, ss,
+find, git-commit, rsync, ip, journalctl and xrandr.
 
 - **Purpose:** hint usually finds the right tool, often in the wrong form
   (`nc -l 4567` to connect to a port). `hint man` is the follow-up the user
@@ -1068,6 +1070,14 @@ Proposed 2026-11-26, not built.
   - its option entries in the man page, or `help TOOL` for a builtin, as
     `hint flags` finds them: each entry is a passage, shown as the form
     `TOOL -FLAG` with the entry's first line as its note.
+- **Reading a man page's examples:** paragraphs are runs of lines between
+  blank lines; a line starting with `$ ` or the tool's name (or `sudo`) is
+  a command, and a command ending in `\` takes the next line. A command's
+  description is the more indented lines right below it (ss), else the
+  nearest paragraph above it that is less indented (nc, also with no
+  blank line between, as xrandr writes it). Bullets (`*`) and a trailing
+  `:` are dropped from the description. Of a block of several commands
+  (git-commit's `$ git add`, `$ git commit`), those of the tool are kept.
 - **Ranking:** no model call and no index. The passages go into an
   in-memory SQLite FTS5 table (porter stemming, as the index uses, so
   "connect" matches "connection"), and the words are searched with bm25,
@@ -1075,8 +1085,12 @@ Proposed 2026-11-26, not built.
   rank before option entries: a matching example is a whole form, an
   option entry is a piece of one, and an entry that mentions the task's
   words may mean the opposite (nc's `-l` says "rather than initiating a
-  connection"). Its note is what lets the user see that. Up to 5 hits are
-  shown.
+  connection"). Its note is what lets the user see that. Up to 3
+  examples are shown, then up to 2 option entries (as the sketch below
+  has them): with examples always first, 5 weak examples hid `history
+  -n` for "read new lines from the history file". The tool's own name is
+  not a search word (every passage has it), and a subcommand word that
+  named a page is not either. A note is cut at about 110 characters.
 - **Output,** one hit per form with where it came from, like a lookup.
   A sketch from the real nc(1) and tldr pages:
 
@@ -1102,13 +1116,17 @@ Proposed 2026-11-26, not built.
     `<--tcp|--udp|--raw|--unix>`: printed bare, `|` would make it a
     pipeline; with `<` it fails harmlessly as a redirect if pasted.
 - **tldr is optional.** The pages are read from a client's local cache,
-  never fetched: tealdeer's (`~/.cache/tealdeer/tldr-pages`, the one
-  checked here), then the other clients' usual places, or a directory
-  given in `HINTDB_TLDR` (also for tests). Pages in `common` and `linux`,
+  never fetched: the directory in `HINTDB_TLDR` when it is set (also for
+  tests, so they never read the real cache), else tealdeer's
+  (`~/.cache/tealdeer/tldr-pages`, the one checked here). Other clients'
+  cache paths were not checked, so they are not guessed: their users set
+  `HINTDB_TLDR`. Either `pages.en` or `pages` under it is read. Pages in `common` and `linux`,
   English. Without them `hint man` searches the man page and help only.
   - **Suggesting it:** when no cache is found and no example matched, the
     output ends with one line: `# no tldr pages here: install tealdeer
-    (or another tldr client) and run tldr --update for more forms`. It is
+    (or another tldr client) and run tldr --update for more forms
+    (https://github.com/tldr-pages/tldr)`. The README explains tldr and
+    links the project (the author's request, 2026-11-27). It is
     only shown when the result is thin, which is when tldr would help (the
     author agreed 2026-11-27);
     no state is kept about having said it before, and on a server
@@ -1125,10 +1143,13 @@ Proposed 2026-11-26, not built.
 - **Limits:** a man page without an example section gives only option
   entries; layouts other than the two above; tools with neither a man
   page nor a tldr page.
-- **Tests:** fake man pages (both example layouts, `USAGE EXAMPLES`), a fake
-  tldr directory (placeholders of each kind), a builtin, the ranking of
-  an example above an option entry, the thin-result note with and without
-  a tldr cache.
+- **Tests:** the `hint flags` man and help fixtures with example sections
+  in both layouts (ss's under `USAGE EXAMPLES`, nc's with a `$` prompt, a
+  description right above its command and a `\` continuation), and a fake
+  tldr cache in `tests/fixtures/tldr` (`HINTDB_TLDR`): a common and a
+  linux page, placeholders of each kind. Checked: the limits of 3 examples
+  and 2 option entries, a builtin, a subcommand page, nothing found, and
+  the install note with and without a tldr cache.
 
 ## Known limitations
 
