@@ -275,12 +275,12 @@ line you can edit. Press Enter to save it, or Ctrl-C to cancel. The question
 is saved as a comment on the command, so the next similar question finds it
 first, even if the model guesses the wrong tool again.
 
-If you ran other commands after the one that worked, name its tool. This
-takes the last line since your question that runs `ss`, also inside a
-pipeline:
+If you ran other commands after the one that worked, name its tool. hint
+then takes the last line since your question that runs that tool anywhere
+in it, so this finds `curl -s https://example.org/api | jq .name`:
 
 ```bash
-hint remember ss
+hint remember jq
 ```
 
 `hint remember` reads your history file, so the command has to be written
@@ -307,7 +307,7 @@ hint forget
 hint takes the first command you ran after your last question, shows it on
 a line you can edit, then asks for an optional reason. If you ran other
 commands first, name the tool to take the first line since your question
-that runs it:
+that runs it, anywhere in the line as for `hint remember`:
 
 ```bash
 hint forget history
