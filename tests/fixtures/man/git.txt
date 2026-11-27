@@ -1,0 +1,5 @@
+GIT(1)                           Git Manual                           GIT(1)
+
+OPTIONS
+       -C <path>
+           Run as if git was started in <path>.

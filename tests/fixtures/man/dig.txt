@@ -1,0 +1,5 @@
+DIG(1)                              BIND 9                              DIG(1)
+
+QUERY OPTIONS
+       +short, +noshort
+              This option toggles a terse answer.

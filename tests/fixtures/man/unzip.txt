@@ -1,0 +1,14 @@
+UNZIP(1L)                                                          UNZIP(1L)
+
+SYNOPSIS
+     unzip [-Z] [-cflptuvz] file[.zip] [-x xfile(s) ...] [-d exdir]
+
+ARGUMENTS
+     [-d exdir]
+            Extract the files into the directory exdir.
+
+     [-x xfile(s)]
+            Leave out the archive members xfile(s).
+
+OPTIONS
+     -l     List the archive's files.

@@ -1,0 +1,10 @@
+PSQL(1)                  Fake Database Manual                  PSQL(1)
+
+OPTIONS
+     -c command
+     --command=command
+         Run the given command string and exit.
+
+     -h hostname
+     --host=hostname
+         Connect to the server on hostname.

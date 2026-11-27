@@ -1,0 +1,7 @@
+KUBECTL-GET(1)(fake)                          KUBECTL-GET(1)(fake)
+
+OPTIONS
+     -o, --output=""	  Output format. One of: (json, yaml, go-
+     template, wide).
+
+     -w, --watch=false	  After listing, watch for changes.

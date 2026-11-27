@@ -1,0 +1,4 @@
+KUBECTL(1)(fake)                                  KUBECTL(1)(fake)
+
+OPTIONS
+     --context=""	  The kubeconfig context to use.

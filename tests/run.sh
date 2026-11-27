@@ -1148,6 +1148,84 @@ out=$(L env HINTDB_LOG="$tmp/list-empty" hintdb forget 2>&1)
 status "forget list: nothing printed: exit 1" 1 $?
 has "forget list: nothing printed: says so" "$out" "nothing to mark"
 
+echo "== hint flags"
+# Fake man and help pages: GNU (ss), BSD (nc), stacked option lines (psql),
+# same-indent continuation (kubectl-get), a subcommand page (git-commit),
+# values (sudo -u, head -n), optional values (lsof -i [i]), + options (dig),
+# and a builtin (history).
+FL() { HINTDB_MAN="$here/fake_doc.sh $fix/man" HINTDB_HELP="$here/fake_doc.sh $fix/help" hint flags "$@"; }
+
+out=$(FL ss -tuln)
+status "flags: every flag found: exit 0" 0 $?
+line "flags: GNU layout, the flag line as the page writes it" "$out" 1 "ss -t, --tcp        Show TCP sockets."
+line "flags: a group is split as getopt does, in the order typed" "$out" 4 \
+  "ss -n, --numeric    Show numbers, do not resolve service names."
+has "flags: description lines joined" "$out" "Show only listening sockets (these are left out by default)."
+lacks "flags: a deeper line starting with the flag is not the entry" "$out" "in an example"
+out=$(FL ss --listening)
+has "flags: a long flag finds its entry" "$out" "ss -l, --listening  Show only listening sockets"
+out=$(FL nc -lv -p 4567)
+line "flags: BSD layout (text after a tab), continuation joined" "$out" 2 \
+  "                   connection to a remote host."
+has "flags: BSD layout, flag with a value" "$out" "nc -p source_port  Use source_port as the source port."
+lacks "flags: the value of -p is not looked up" "$out" "4567"
+out=$(FL nc -q:a 5 -z)
+has "flags: -x:y is looked up as -x; a comma in parentheses is not an item break" "$out" "nc -q[:stream] seconds (input,output)"
+has "flags: -x:y's value is not looked up, the next flag is" "$out" "Scan for listening daemons"
+lacks "flags: -x:y is not split into letters" "$out" "nc -:"
+out=$(FL 'sudo -u postgres psql -c x | grep -r foo')
+has "flags: a quoted pipeline: the wrapper's flags" "$out" "sudo -u user, --user=user"
+lacks "flags: the wrapper's value is not taken for the command" "$out" "postgres "
+has "flags: stacked option lines are one entry" "$out" "psql -c command, --command=command"
+has "flags: stacked option lines: the description below them" "$out" "Run the given command string and exit."
+has "flags: each command of the pipeline" "$out" "grep -r, --recursive"
+out=$(FL sudo -b -u root id)
+has "flags: a flag is never taken as another flag's value" "$out" "sudo -u user, --user=user"
+out=$(FL sudo grep -r foo)
+lacks "flags: a wrapper without flags is skipped" "$out" "sudo"
+out=$(FL kubectl get pods -o wide)
+has "flags: a subcommand page is read first, shown with the subcommand" "$out" 'kubectl get -o, --output=""'
+has "flags: same-indent continuation, joined at a real hyphen" "$out" "(json, yaml, go-template,"
+out=$(FL kubectl get --context=x)
+has "flags: the tool's own page after the subcommand's" "$out" 'kubectl get --context=""  The kubeconfig context to use.'
+out=$(FL git commit -a --amend -m msg)
+has "flags: subcommand page" "$out" "git commit --amend"
+has "flags: --name=value spec shown" "$out" "git commit -m <msg>, --message=<msg>"
+out=$(FL git commit --message=hi)
+has "flags: --name=value is looked up as --name" "$out" "Use <msg> as the commit message."
+out=$(FL head -n10 file)
+line "flags: -n10 is -n with its value" "$out" 1 "head -n, --lines=[-]NUM  print the first NUM lines"
+out=$(FL head -n -5 file)
+lacks "flags: a value starting with - is not looked up" "$out" "-5"
+out=$(FL lsof -i -P +D /tmp)
+has "flags: an optional [value] does not take the next word" "$out" "lsof -P      does not convert port numbers"
+has "flags: a + option listed on the page" "$out" "lsof +D D    searches for open files"
+out=$(FL find . -mtime +30)
+lacks "flags: a + word not on the page is not listed" "$out" "+30"
+out=$(FL unzip -l -d out a.zip)
+has "flags: a bracketed option line, as unzip writes it" "$out" "unzip -d exdir  Extract the files into the directory exdir."
+lacks "flags: the bracketed option's value is not looked up" "$out" "unzip out"
+has "flags: unzip's plain option lines still found" "$out" "unzip -l        List the archive's files."
+out=$(FL dig +short example.org)
+has "flags: dig +short" "$out" "dig +short, +noshort  This option toggles a terse answer."
+out=$(FL history -n 10)
+has "flags: a builtin's help" "$out" "history -n  read all history lines not already read from the history file"
+out=$(FL history -x)
+has "flags: a flag not in the builtin's help" "$out" "history -x  not in help history"
+out=$(FL ss -e)
+status "flags: a flag not on the page: exit 1" 1 $?
+has "flags: a flag not on the page says so, with the page" "$out" "ss -e  not in ss(8)"
+out=$(FL nosuchtool -a)
+status "flags: no page: exit 1" 1 $?
+has "flags: no page, no help" "$out" "nosuchtool  no man page or builtin help here"
+out=$(FL 'ss -t | grep LISTEN')
+status "flags: a command with no flags is not a miss: exit 0" 0 $?
+line "flags: a command with no flags is listed, not skipped" "$out" 3 "grep          no flags"
+FL >/dev/null 2>&1
+status "flags alone: usage, exit 2" 2 $?
+FL fakeflagq -a >/dev/null 2>&1
+lacks "flags: nothing is written to the query log" "$(cat "$HINTDB_LOG" 2>/dev/null)" "fakeflagq"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

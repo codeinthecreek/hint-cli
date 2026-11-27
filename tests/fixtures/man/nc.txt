@@ -1,0 +1,20 @@
+NC(1)                   General Commands Manual                  NC(1)
+
+NAME
+     nc - fake netcat page for tests
+
+OPTIONS
+     -l	Listen for an incoming connection rather than initiating
+	 a connection to a remote host.
+
+     -p source_port
+	 Use source_port as the source port.
+
+     -u	Use UDP instead of TCP.
+
+     -v	Be verbose.
+
+     -q[:stream] seconds (input,output)
+	 Quit after seconds.
+
+     -z	Scan for listening daemons without sending data.

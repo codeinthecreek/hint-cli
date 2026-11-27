@@ -1,0 +1,5 @@
+GREP(1)                        User Commands                       GREP(1)
+
+OPTIONS
+       -r, --recursive
+              Read all files under each directory.

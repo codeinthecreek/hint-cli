@@ -1,0 +1,11 @@
+GIT-COMMIT(1)                    Git Manual                    GIT-COMMIT(1)
+
+OPTIONS
+       -a, --all
+           Stage modified and deleted files before committing.
+
+       --amend
+           Replace the tip of the current branch with a new commit.
+
+       -m <msg>, --message=<msg>
+           Use <msg> as the commit message.
