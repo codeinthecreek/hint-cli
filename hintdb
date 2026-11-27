@@ -35,6 +35,9 @@ DB, because dedup is global across sources.
                                                      COMMAND (nothing is changed)
   hintdb forget --save [--reason R] -- COMMAND       mark COMMAND WRONG in the
                                                      wrong file (used by hint forget)
+  hintdb flags -- COMMAND...                         what each flag of COMMAND does,
+                                                     from help or its man page
+                                                     (used by hint flags)
 
 Query log: each `find` from the command line appends one JSON line (time,
 question, guesses, printed lines, each printed row's source files) to
@@ -49,6 +52,10 @@ The file is a built-in source, read as history, whenever it exists.
 Man pages: NAME lines of installed section 1/8 pages (from `apropos .`) go in a
 separate man.db, rebuilt only when man-db's index changes; used for the summary
 on model-suggested tools and listed by `query`. Set HINTDB_NO_MAN=1 to disable.
+
+Flags: `flags` reads a bash builtin's `help`, else the man page, and prints
+the option entry of each flag; HINTDB_MAN and HINTDB_HELP replace the man and
+help commands (for testing).
 """
 import argparse
 import fcntl
@@ -64,6 +71,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 
 XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
@@ -2003,6 +2011,253 @@ def remember_save(question, cmd):
         return f"cannot write {ANSWERS}: {e}"
     return None
 
+# ---------------------------------------------------------------- flags
+# What each flag of a command does, from the tool's own documentation: a bash
+# builtin's `help`, else its man page. No model, and never `TOOL --help` (it
+# would run the program being checked). HINTDB_MAN / HINTDB_HELP replace the
+# man and help commands (tests): each is run with the page name and prints
+# the page, or exits non-zero when there is none.
+
+MAN_CMD = os.environ.get("HINTDB_MAN")
+HELP_CMD = os.environ.get("HINTDB_HELP")
+FLAG_GAP = re.compile(r"\t| {2,}")          # between an option line's flags and its text
+OVERSTRIKE = re.compile(r".\x08|\x1b\[[0-9;]*m")
+_pages = {}
+
+
+def doc_page(name, builtin=True):
+    """(label, lines) of `help NAME` for a bash builtin, else `man NAME`;
+    (None, None) when there is neither."""
+    key = (name, builtin)
+    if key in _pages:
+        return _pages[key]
+    res = (None, None)
+    if builtin:
+        cmd = (shlex.split(HELP_CMD) + [name] if HELP_CMD else
+               ["bash", "-c", '[ "$(type -t -- "$1")" = builtin ] && help -- "$1"', "_", name])
+        out = subprocess.run(cmd, capture_output=True, text=True)
+        if out.returncode == 0 and out.stdout.strip():
+            res = (f"help {name}", out.stdout.splitlines())
+    if res[0] is None:
+        # --nh --nj: no hyphenation or justification, so words are not split
+        cmd = shlex.split(MAN_CMD) + [name] if MAN_CMD else ["man", "--nh", "--nj", name]
+        env = dict(os.environ, LC_ALL="C", MANWIDTH="80", MANPAGER="cat", PAGER="cat")
+        env.pop("MAN_KEEP_FORMATTING", None)
+        out = subprocess.run(cmd, capture_output=True, text=True, env=env, errors="replace")
+        if out.returncode == 0 and out.stdout.strip():
+            lines = OVERSTRIKE.sub("", out.stdout).splitlines()
+            sec = re.match(r"\S+\((\w+)\)", lines[0].strip()) if lines else None
+            res = (f"{name}({sec.group(1)})" if sec else name, lines)
+    _pages[key] = res
+    return res
+
+
+def option_head(line):
+    """(flag spec, description start, takes_value) when LINE starts an option
+    entry, else None. The spec is the part before the gap: comma-separated
+    items that all start with `-`, such as `-u user, --user=user`."""
+    s = line.strip()
+    if s[:1] not in ("-", "+") or s[:2] in ("- ", "+ ") or s in ("-", "--", "+"):
+        return None
+    parts = FLAG_GAP.split(s, 1)
+    spec, text = parts[0], parts[1].strip() if len(parts) > 1 else ""
+    items = [i for i in re.split(r",\s+|,$", spec) if i]   # not ffmpeg's `(output,per-stream)`
+    if not items or not all(re.match(r"-[^\s-]|--[^\s-]|\+[^\s+\d]", i) for i in items):
+        return None
+    flags, value = [], None
+    for i in items:
+        m = re.match(r"([-+][^\s=\[]*)(.*)", i)
+        flags.append(m.group(1))
+        rest = m.group(2)
+        if rest.startswith("[=") or rest.strip().startswith("["):
+            value = value or "optional"           # `-i [i]`, `--color[=WHEN]`
+        elif rest.startswith("=") or (rest.startswith(" ") and rest.strip()[:1] not in ("", "-", "(")):
+            value = "required"                    # not ffmpeg's `-vn (input/output)`
+    return flags, spec, text, value
+
+
+def indent(line):
+    return len(line.expandtabs()) - len(line.expandtabs().lstrip())
+
+
+def find_flag(lines, flag):
+    """The option entry for FLAG: (spec, description, takes_value) or None.
+    Of the lines naming it, the least indented wins (option lists are less
+    indented than the text that mentions them). Option lines stacked with no
+    text between them (`-c command` over `--command=command`) are one entry.
+    The description runs to a blank line, the next option line, or a line
+    indented less than the option."""
+    best = None
+    for i, line in enumerate(lines):
+        head = option_head(line)
+        if head and flag in head[0] and (best is None or indent(line) < best[0]):
+            best = (indent(line), i)
+    if best is None:
+        return None
+    ind, i = best
+    first = last = i
+    while (first > 0 and option_head(lines[first - 1]) and indent(lines[first - 1]) == ind
+           and not option_head(lines[first - 1])[2]):
+        first -= 1
+    while (not option_head(lines[last])[2] and last + 1 < len(lines)
+           and option_head(lines[last + 1]) and indent(lines[last + 1]) == ind):
+        last += 1
+    heads = [option_head(lines[k]) for k in range(first, last + 1)]
+    spec = ", ".join(h[1] for h in heads)
+    value = next((h[3] for h in heads if h[3] == "required"), None) or \
+        next((h[3] for h in heads if h[3]), None)
+    desc = [heads[-1][2]] if heads[-1][2] else []
+    for line in lines[last + 1:]:
+        if not line.strip():
+            if desc:
+                break
+            continue
+        if option_head(line) or indent(line) < ind or (not desc and indent(line) == ind):
+            break
+        desc.append(line.strip())
+    text = ""                                     # a line ending in a hyphen is a
+    for d in desc:                                # real hyphen (no hyphenation)
+        text += d if text.endswith("-") and text[-2:-1].isalpha() else (" " if text else "") + d
+    return spec, " ".join(text.split()), value
+
+
+def explain_command(words):
+    """Explain the flags of one simple command (wrappers first). Returns a list
+    of groups: (tool, label, [(spec, description) or (flag, None)]) and the
+    index where the next wrapped command starts, or None."""
+    i = 0
+    while i < len(words) and ASSIGN.match(words[i]):
+        i += 1
+    if i >= len(words):
+        return None, None
+    tool = os.path.basename(words[i])
+    pages, shown = [], tool
+    if i + 1 < len(words) and not words[i + 1].startswith("-"):
+        sub = doc_page(f"{tool}-{words[i + 1]}", builtin=False)
+        if sub[0]:
+            pages.append(sub)
+            shown = f"{tool} {words[i + 1]}"
+    main = doc_page(tool)
+    if main[0]:
+        pages.append(main)
+    if not pages:
+        return (shown, None, []), None
+    label = " or ".join(p[0] for p in pages)
+
+    def look(flag):
+        for _, lines in pages:
+            e = find_flag(lines, flag)
+            if e:
+                return e
+        return None
+
+    def is_value(k):
+        """Words[k] is taken as a flag's value: not another flag (docker's
+        `-d, --detach=true|false` takes none), except a negative number."""
+        return k < len(words) and (not words[k].startswith("-") or
+                                   re.fullmatch(r"-\d+", words[k]) is not None)
+
+    out, j, wrapped = [], i + 1, None
+    while j < len(words):
+        w = words[j]
+        j += 1
+        if w == "--":
+            break
+        if w.startswith("+") and len(w) > 1:      # `dig +short`, `lsof +D`: only if listed
+            e = look(w.split("=", 1)[0])
+            if e:
+                out.append((e[0], e[1]))
+                if e[2] == "required" and "=" not in w and is_value(j):
+                    j += 1
+            continue
+        if not w.startswith("-") or w == "-":
+            if tool in PREFIX:
+                wrapped = j - 1
+                break
+            continue
+        name = w.split("=", 1)[0] if w.startswith("--") else w.split(":", 1)[0]  # ffmpeg -q:a
+        e = look(name)
+        if e:
+            out.append((e[0], e[1]))
+            if e[2] == "required" and "=" not in w and is_value(j):
+                j += 1
+            continue
+        if w.startswith("--") or len(name) <= 2 or not name[1:].isalnum():
+            out.append((name, None))
+            continue
+        for k, c in enumerate(name[1:], 1):       # a group, read as getopt does
+            e = look("-" + c)
+            if not e:
+                out.append(("-" + c, None))
+                continue
+            out.append((e[0], e[1]))
+            if e[2]:
+                if e[2] == "required" and k == len(name) - 1 and is_value(j):
+                    j += 1
+                break                                 # the rest of the group is its value
+    if tool in PREFIX and not out:
+        return None, wrapped
+    return (shown, label, out), wrapped
+
+
+def flags_report(args):
+    """Lines explaining every flag of the command(s) in ARGS. One argument is
+    read as a command line (quoted pipelines); several are its words."""
+    if len(args) == 1:
+        lex = shlex.shlex(args[0], posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        try:
+            words = list(lex)
+        except ValueError:
+            words = args[0].split()
+    else:
+        words = list(args)
+    segs, cur = [], []
+    for w in words:
+        if w in CMD_SEP or w == "&":
+            segs.append(cur)
+            cur = []
+        elif not re.fullmatch(r"[<>&|()]+", w):
+            cur.append(w)
+    segs.append(cur)
+    groups = []
+    for seg in segs:
+        while seg:
+            g, nxt = explain_command(seg)
+            if g:
+                groups.append(g)
+            if nxt is None:
+                break
+            seg = seg[nxt:]
+    rows = []
+    for tool, label, entries in groups:
+        if label is None:
+            rows.append((tool, "no man page or builtin help here"))
+        elif not entries:
+            rows.append((tool, "no flags"))
+        for spec, desc in entries:
+            rows.append((f"{tool} {spec}", desc if desc is not None else f"not in {label}"))
+        rows.append(None)
+    width = min(max((len(r[0]) for r in rows if r), default=0) + 2, 32)
+    out = []
+    for r in rows[:-1]:
+        if r is None:
+            out.append("")
+            continue
+        left, desc = r
+        wrap = textwrap.wrap(desc, max(80 - width, 30), break_on_hyphens=False) or [""]
+        if len(wrap) > 4:
+            wrap = wrap[:4]
+            wrap[3] += " ..."
+        if len(left) + 2 > width:
+            out.append(left)
+            out += [" " * width + t for t in wrap]
+        else:
+            out.append(left.ljust(width) + wrap[0])
+            out += [" " * width + t for t in wrap[1:]]
+    return out
+
+
 # ---------------------------------------------------------------- cli
 
 
@@ -2054,6 +2309,9 @@ def main():
                     help="append COMMAND  # WRONG! (or # WRONG: REASON) to the wrong file")
     fg.add_argument("--reason", help="with --save")
     fg.add_argument("words", nargs="*", help="TOOL, or with --where/--marked/--save the COMMAND")
+    fl = sub.add_parser("flags")
+    fl.add_argument("command", nargs=argparse.REMAINDER,
+                    help="the command's words, or the whole command as one word")
     q = sub.add_parser("query")
     q.add_argument("-n", type=int, default=15)
     q.add_argument("--no-update", action="store_true")
@@ -2120,6 +2378,11 @@ def main():
         if err:
             sys.exit("hintdb: " + err)
         print_pick(res)
+    elif args.op == "flags":
+        words = args.command[1:] if args.command[:1] == ["--"] else args.command
+        if not words:
+            sys.exit("hintdb: flags needs a command, e.g. hintdb flags -- ss -tuln")
+        print("\n".join(flags_report(words)))
     elif args.op == "rebuild":
         report(update(force=True))
     elif args.op == "update":

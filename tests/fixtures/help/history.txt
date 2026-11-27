@@ -1,0 +1,8 @@
+history: history [-c] [-d offset] [n] or history -anrw [filename]
+    Display or manipulate the history list.
+
+    Options:
+      -c	clear the history list by deleting all of the entries
+      -d offset	delete the history entry at position OFFSET.
+      -n	read all history lines not already read from the history file
+		and append them to the history list

@@ -1,0 +1,9 @@
+LSOF(8)                  System Manager's Manual                 LSOF(8)
+
+OPTIONS
+       -i [i]   selects files whose Internet address matches i, or all
+                Internet files when i is not given.
+
+       -P       does not convert port numbers to port names.
+
+       +D D     searches for open files in directory D, to any depth.

@@ -255,6 +255,36 @@ them while other terminals are open:
    Don't use `history -n` after an edit: it skips as many new lines as you
    deleted.
 
+### Checking a command's flags
+
+hint often finds the right tool in the wrong form: for "connect to port
+4567" a model may suggest `nc -l 4567`, and `-l` listens instead. Before
+running a suggestion, check what its flags do:
+
+```bash
+hint flags nc -l 4567
+```
+
+```
+nc -l  Listen for an incoming connection rather than initiating a connection to
+       a remote host. ...
+```
+
+The text comes from the tool's own documentation: `help` for a bash builtin
+(`hint flags history -n 10`), otherwise its man page, the subcommand's page
+first (`hint flags git commit --amend` reads git-commit(1), then git(1)). No
+model is asked, and the command is never run, not even with `--help`. Quote
+a pipeline, so the shell doesn't act on it:
+
+```bash
+hint flags 'sudo lsof -i -P -n | grep LISTEN'
+```
+
+Each command of the pipeline is explained in turn. A grouped `-tuln` is read
+one letter at a time, as the tool itself reads it, and a flag's value
+(`-n 10`, `-u postgres`) is not looked up. A flag the page doesn't list says
+`not in nc(1)`; nothing is guessed.
+
 ### Past lookups
 
 Every lookup is kept in a local query log, and these commands read it
@@ -361,6 +391,11 @@ commands from it.
   each one stays a separate row.
 - **Long and short options** (`-r`, `--recursive`) aren't treated as the same.
 - **Bash history without timestamps** gives only rough recency (line order).
+- **`hint flags`** reads options that start with `-` (and `+` ones the page
+  lists, as dig's). Operands such as dd's `if=` and old-style `tar xvf`
+  aren't flags to it. Man pages laid out differently from the usual option
+  lists give less, and a tool without a man page or builtin help gives
+  nothing.
 
 ## Reference
 
@@ -374,6 +409,7 @@ commands from it.
 | `grep [-c] WORD` | past lookups whose question or commands contain WORD; `-c`: just the number |
 | `remember [TOOL]` | save your last command, or your last TOOL command, as the answer to the last question |
 | `forget [TOOL]` | mark the first command after your last question, or the first TOOL command, as wrong, so hint never shows it |
+| `flags COMMAND...` | what each flag of COMMAND does, from the builtin's help or the man page; quote a pipeline |
 
 `--show` and `--delete` stand alone. `hint help` prints the usage; `hint
 help me ...` is a question.
@@ -394,6 +430,7 @@ help me ...` is a question.
 | `hintdb remember [TOOL]` | the last question and the command that answers it (used by `hint remember`) |
 | `hintdb forget --where -- COMMAND` | the files and lines that hold COMMAND, and where it is marked |
 | `hintdb forget --save [--reason R] -- COMMAND` | mark COMMAND as wrong (used by `hint forget`) |
+| `hintdb flags -- COMMAND...` | what each flag of COMMAND does (used by `hint flags`) |
 | `hintdb query [-n N] WORDS...` | the search for the words alone, with scores (debugging) |
 
 Source kinds are detected from the file name. Use `--kind` to override, for

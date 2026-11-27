@@ -1,0 +1,11 @@
+SUDO(8)                  System Manager's Manual                 SUDO(8)
+
+OPTIONS
+     -n, --non-interactive
+                 Never prompt for a password.
+
+     -b, --background=true|false
+                 Run the command in the background.
+
+     -u user, --user=user
+                 Run the command as user.

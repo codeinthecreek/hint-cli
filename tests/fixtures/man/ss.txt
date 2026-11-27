@@ -1,0 +1,26 @@
+SS(8)                     System Manager's Manual                    SS(8)
+
+NAME
+       ss - fake socket statistics page for tests
+
+OPTIONS
+       -n, --numeric
+              Show numbers, do not resolve service names.
+
+       -l, --listening
+              Show only listening sockets (these are left
+              out by default).
+
+       -t, --tcp
+              Show TCP sockets.
+
+       -u, --udp
+              Show UDP sockets.
+
+       -p, --processes
+              Show the process using each socket.
+
+EXAMPLES
+       ss -t -a
+              Text that mentions -l in passing, more indented.
+              -l  in an example, deeper than the option list.

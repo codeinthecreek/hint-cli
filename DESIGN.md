@@ -941,7 +941,9 @@ Agreed and built 2026-11-26.
 
 ## Flags
 
-Proposed 2026-11-26, not built.
+Proposed 2026-11-26, built 2026-11-27 (`hintdb flags`, called by `hint
+flags`). Checked against about 30 real pages (ss, nc, lsof, sudo, psql, tar,
+git-commit, kubectl-get, curl, rsync, journalctl, dig, find, ...).
 
 - **Purpose:** hint often finds the right tool in the wrong form. For "how
   do I connect to port 4567" the model gave `nc -l 4567`, and `-l`
@@ -953,26 +955,49 @@ Proposed 2026-11-26, not built.
   when it has a pipe or `;`, so the shell doesn't act on them:
   `hint flags nc -l 4567`, `hint flags 'sudo lsof -i -P -n | grep LISTEN'`.
   Each command in a pipeline or list is explained in turn. Wrappers
-  (`sudo`, `env`, `time`, and so on, the same list the index uses) are
-  skipped, so the tool after them is explained.
+  (`sudo`, `env`, `time`, and so on, the same list the index uses) without
+  flags are skipped, so the tool after them is explained. A wrapper with
+  flags (`sudo -u postgres psql`, `nice -n 19 ionice -c 3 rsync`) has its
+  own flags explained too; the wrapped command starts at the first word
+  after them that is not a flag's value (below).
 - **Where the text comes from:** no model call. A 3b model explaining
   flags makes the same kind of mistake the command is checked for.
   - a bash builtin (`history`, `read`, `cd`): `help TOOL`. `hint flags
     history -n 10` shows `-n  read all history lines not already read from
     the history file`, which takes no count;
   - otherwise the man page, rendered as plain ASCII (`LC_ALL=C`,
-    `MANWIDTH=80`, `col -b`). A subcommand's own page is tried first:
-    `git commit -a` reads `git-commit(1)`, then `git(1)`;
+    `MANWIDTH=80`, `man --nh --nj` so words are not hyphenated across
+    lines nor spaced out, overstrikes removed). A subcommand's own page is
+    tried first: `git commit -a` reads `git-commit(1)`, then `git(1)`, and
+    the flags are shown as `git commit -a`;
   - never `TOOL --help`: it runs the program that is being checked.
-- **Finding a flag:** a line whose text starts with the flag, followed by
-  the end of the line, a space, a tab, `,`, `=` or `[`. This covers both
-  layouts: GNU (`-l, --listening` with the description on the next lines)
-  and BSD (`-l` and the description after a tab). The entry is that line
-  and the lines after it, up to a blank line or a line indented no more
-  than the flag's line. It is cut after 4 lines, with `...`.
+- **Finding a flag:** an option line is one whose text before the first tab
+  or double space is a comma-separated list of items that all start with
+  `-` (`-u user, --user=user`); the flag must be one of its items, so a long
+  flag finds `-l, --listening` too. Of the option lines naming the flag,
+  the least indented is the entry: an option list is less indented than
+  the text that mentions a flag at the start of a line. Option lines
+  stacked with no text between them (psql's `-c command` over
+  `--command=command`) are one entry. The description is the text after
+  the gap on the flag's line (BSD: `-l` then a tab) and the lines below,
+  up to a blank line, the next option line or a line indented less than
+  the flag's line; GNU pages put it on deeper lines, generated pages
+  (kubectl-get) at the same indent. A hyphen at a line end is kept as a
+  real one (`go-` + `template`). Shown cut after 4 lines, with `...`.
+  Three layouts were seen on the real pages; nothing more is special-cased.
   - `--name=value` is looked up as `--name`;
-  - `-tuln` that is not in the page itself is looked up as `-t -u -l -n`;
-  - words that are not flags (`4567`, file names) are not listed.
+  - `-tuln` that is not in the page itself is read as getopt reads it:
+    `-t -u -l -n`, and a letter that takes a value takes the rest of the
+    group (`-n10`, `-xzf archive`);
+  - a flag takes a value when its option line shows one (`-u user`,
+    `--lines=NUM`); that value is the next word unless the flag has
+    `=value` or the value was in its group, and it is not looked up
+    (`head -n -5`). A value in brackets (`-i [i]`, `--color[=WHEN]`) is
+    optional and never takes the next word;
+  - a word starting with `+` is a flag only when the page has an option
+    line for it (dig's `+short`, lsof's `+D`), so `find -mtime +30` lists
+    nothing for `+30`;
+  - other words that are not flags (`4567`, file names) are not listed.
 - **Output:** one entry per flag, in the order typed, each with the flag
   line as the page writes it (so the long name shows too), and the
   descriptions lined up so a split group reads as one table. Text from the
@@ -1001,12 +1026,16 @@ Proposed 2026-11-26, not built.
   - `hint flags N` for line N of the last lookup's output: hint's output
     is not numbered, and a numbered form was found confusing for forget;
   - asking the model, or running `--help` (above).
-- **Limits:** pages with an unusual layout; tools with no page (`kubectl`
-  has `--help` only); a flag whose description lists several flags on one
-  line is found only by the first.
-- **Tests:** fake man and help output (a GNU page, a BSD page, a builtin,
-  a subcommand page), grouped flags, `--name=value`, a pipeline quoted as
-  one word, `sudo`, a missing flag and a missing page.
+- **Limits:** pages with an unusual layout; tools with no page or builtin
+  help; operands that are not flags (dd's `if=`, old-style `tar xvf`); a
+  wrapper's quoted command (`watch 'ss -t'`) is not explained.
+- **Tests:** `HINTDB_MAN` and `HINTDB_HELP` replace the man and help
+  commands with `tests/fake_doc.sh`, which prints synthetic pages from
+  `tests/fixtures/man` and `tests/fixtures/help`: the three layouts,
+  stacked option lines, a subcommand page, values, optional values, `+`
+  options and a builtin, plus grouped flags, `--name=value`, a quoted
+  pipeline, wrappers with and without flags, a missing flag and a missing
+  page.
 
 ## Man
 
@@ -1073,7 +1102,8 @@ Proposed 2026-11-26, not built.
   - **Suggesting it:** when no cache is found and no example matched, the
     output ends with one line: `# no tldr pages here: install tealdeer
     (or another tldr client) and run tldr --update for more forms`. It is
-    only shown when the result is thin, which is when tldr would help;
+    only shown when the result is thin, which is when tldr would help (the
+    author agreed 2026-11-27);
     no state is kept about having said it before, and on a server
     without tldr where a man example matched, nothing is said.
 - **Not taken:**

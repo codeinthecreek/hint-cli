@@ -1,0 +1,8 @@
+HEAD(1)                        User Commands                       HEAD(1)
+
+OPTIONS
+       -n, --lines=[-]NUM
+              print the first NUM lines
+
+       -q, --quiet
+              never print file name headers
