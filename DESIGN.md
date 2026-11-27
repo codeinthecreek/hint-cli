@@ -57,6 +57,22 @@ notes, in the form the user actually uses. Nothing is ever executed.
    same few questions and added noise (more in up to 27 questions); the
    second example lost "how do I shut down kubernetes".
 
+   **Model settings** are environment variables, like `HINT_MODEL` (the
+   author's choice, 2026-11-27, over a config file): `HINT_KEEP_ALIVE`
+   (sent as `keep_alive`; whole seconds as a number, anything else as a
+   string; unset leaves the server's setting), `HINT_OLLAMA_OPTIONS` (one
+   JSON object laid over hint's `temperature` 0 and `num_predict` 120, so
+   any Ollama option works without hint knowing its meaning) and
+   `HINT_TIMEOUT` (default 60 s), and `HINT_THINK` (top-level `think`,
+   default `false`: a thinking model would spend `num_predict` on its
+   reasoning and leave no answer; Ollama 0.40.16 accepts `think: false`
+   from models that cannot think and refuses `true` with an error). Prompted by trying qwen2.5-coder:7b on a
+   4 GB GPU: its first load took 84 s, over the old fixed 60 s, and loads
+   after the server's 5 minute keep-alive took 1-27 s. A bad
+   `HINT_OLLAMA_OPTIONS` or `HINT_TIMEOUT` stops hint before any request
+   (exit 1); a bad keep_alive value is refused by Ollama, whose error
+   hint prints. Unknown option names are only warned about in Ollama's log.
+
    **When the model fails**, the two cases are reported differently:
    - **No connection** (Ollama not running, wrong host, timeout, or an
      error from Ollama such as an unknown model): hint says which, names

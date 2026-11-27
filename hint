@@ -16,6 +16,12 @@
 # Env:
 #   HINT_MODEL   Ollama model           (default qwen2.5-coder:3b)
 #   OLLAMA_HOST  Ollama server URL      (default http://localhost:11434)
+#   HINT_KEEP_ALIVE  how long Ollama keeps the model loaded, e.g. 2h, -1, 0
+#                (default: unset, the server's own setting)
+#   HINT_OLLAMA_OPTIONS  JSON object of Ollama model options laid over
+#                hint's own, e.g. '{"num_gpu": 12}'
+#   HINT_TIMEOUT seconds to wait for Ollama (default 60)
+#   HINT_THINK   thinking mode: false (default), true, or a level such as low
 #   HINT_DEBUG   set to print the raw model guesses and find scores to stderr
 # Requires: curl, jq, hintdb.
 #
@@ -255,30 +261,50 @@ query="$*"
 model="${HINT_MODEL:-qwen2.5-coder:3b}"
 host="${OLLAMA_HOST:-http://localhost:11434}"
 case "$host" in http://*|https://*) ;; *) host="http://$host" ;; esac
+timeout="${HINT_TIMEOUT:-60}"
+[[ $timeout =~ ^[1-9][0-9]*$ ]] || {
+  echo "hint: HINT_TIMEOUT must be a whole number of seconds, not \"$timeout\"" >&2; exit 1; }
+keep_alive="${HINT_KEEP_ALIVE:-}"
+think="${HINT_THINK:-false}"
+opts='{}'
+if [ -n "${HINT_OLLAMA_OPTIONS:-}" ]; then
+  opts=$(jq -cse 'if length == 1 and (.[0] | type) == "object" then .[0] else error end' \
+           <<<"$HINT_OLLAMA_OPTIONS" 2>/dev/null) || {
+    echo "hint: HINT_OLLAMA_OPTIONS must be one JSON object, e.g. '{\"num_gpu\": 12}'" >&2; exit 1; }
+fi
 
 system="You suggest Linux shell commands. Reply with 1 to 3 commands that do what the user's request asks, best first, one per line. Each line is one complete command with example arguments. Output only the commands: no prose, no numbering, no markdown. If you are not sure which tool fits, use a different tool on each line."
 
 # One worked example as a prior exchange, then the real request.
-body=$(jq -n --arg model "$model" --arg system "$system" --arg query "$query" '{
+# HINT_OLLAMA_OPTIONS keys override hint's own; a keep_alive of whole
+# seconds (-1, 0, 3600) is sent as a number, anything else (2h) as a string.
+# think is false unless HINT_THINK says otherwise: a thinking model would
+# spend num_predict on its reasoning and leave no answer.
+body=$(jq -n --arg model "$model" --arg system "$system" --arg query "$query" \
+         --argjson opts "$opts" --arg ka "$keep_alive" --arg think "$think" '{
   model: $model, stream: false,
-  options: { temperature: 0, num_predict: 120 },
+  think: (if $think == "true" then true elif $think == "false" then false else $think end),
+  options: ({ temperature: 0, num_predict: 120 } + $opts),
   messages: [
     { role: "system",    content: $system },
     { role: "user",      content: "show disk usage of a directory" },
     { role: "assistant", content: "du -sh /var/log\nncdu /var/log" },
     { role: "user",      content: $query }
   ]
-}')
+} + (if $ka == "" then {}
+     elif ($ka | test("^-?[0-9]+$")) then { keep_alive: ($ka | tonumber) }
+     else { keep_alive: $ka } end)')
+[ -n "${HINT_DEBUG:-}" ] && jq -r '"hint: request: model \(.model), keep_alive \(.keep_alive // "server default"), think \(.think), timeout '"$timeout"' s, options \(.options | tojson)"' <<<"$body" >&2
 
 # A connection problem is a setup problem: say which, and stop.
-resp=$(curl -s --fail-with-body --max-time 60 \
+resp=$(curl -s --fail-with-body --max-time "$timeout" \
          -H 'Content-Type: application/json' \
          -d "$body" "$host/api/chat")
 rc=$?
 if [ $rc -ne 0 ]; then
   case $rc in
     6|7) echo "hint: cannot connect to Ollama at $host (is it running?)" >&2 ;;
-    28)  echo "hint: Ollama at $host did not answer within 60 s (model $model)" >&2 ;;
+    28)  echo "hint: Ollama at $host did not answer within $timeout s (model $model); loading a model can take longer: raise HINT_TIMEOUT" >&2 ;;
     22)  err=$(jq -r '.error // empty' <<<"$resp" 2>/dev/null)
          echo "hint: Ollama at $host returned an error (model $model): ${err:-$resp}" >&2 ;;
     *)   echo "hint: no response from Ollama at $host (model $model; curl exit $rc)" >&2 ;;
@@ -287,6 +313,10 @@ if [ $rc -ne 0 ]; then
 fi
 
 raw=$(jq -r '.message.content // empty' <<<"$resp")
+if [ -n "${HINT_DEBUG:-}" ]; then
+  thinking=$(jq -r '.message.thinking // empty' <<<"$resp")
+  [ -n "$thinking" ] && printf 'hint: model thinking:\n%s\n' "$thinking" >&2
+fi
 [ -n "${HINT_DEBUG:-}" ] && printf 'hint: model guesses:\n%s\n' "$raw" >&2
 
 # Clean model output: drop fences and blank lines, strip "$ " prompts,
