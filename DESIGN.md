@@ -94,6 +94,14 @@ notes, in the form the user actually uses. Nothing is ever executed.
    1. **Words.** Query terms (stopwords dropped); the guesses' tools (command
       words, in guess order); the guesses' literal words (not flags, not
       filler such as `path`, `user`, `server`).
+      A row's guess-word score is the idf-weighted share of the guess words
+      it has. A guess word that is in no row where words count (2. below),
+      such as a made-up name or `x1080` from `1920x1080`, is left out of
+      the total: it can count for no row, and in the total it only lowered
+      every row's share alike (the user's xrandr row had 0.45, now 1.00).
+      Measured 2026-11-22 and again 2026-11-27 on the same snapshot: no
+      useful answer moves; hold-out junk 123 -> 119, noise 232 -> 226. The
+      author dropped the "wait for a real query" condition 2026-11-27.
    2. **Where words count.** In a row's command, arguments and note. Also in
       its paths and other values only when the query mentions a path: it
       contains `/` or `~`, or the word dir, directory, folder or path
