@@ -306,6 +306,10 @@ hint grep "ssh key"
 |---|---|---|
 | `HINT_MODEL` | `qwen2.5-coder:3b` | Ollama model |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server |
+| `HINT_KEEP_ALIVE` | unset (the server's setting) | how long Ollama keeps the model loaded after a lookup: `2h`, `-1` (until Ollama restarts), `0` (unload at once) |
+| `HINT_OLLAMA_OPTIONS` | unset | Ollama model options as one JSON object, laid over hint's own (`temperature` 0, `num_predict` 120) |
+| `HINT_TIMEOUT` | `60` | seconds to wait for Ollama; loading a larger model can take longer |
+| `HINT_THINK` | `false` | thinking mode for models that have one: `true`, `false`, or a level such as `low` |
 | `HINT_DEBUG` | unset | print the model's guesses and the search scores to stderr |
 | `HINTDB_IGNORE` | empty | extra command words never to index (space-separated) |
 | `HINTDB_NO_MAN` | unset | disable the man page index |
@@ -317,6 +321,32 @@ hint grep "ssh key"
 | `HINTDB_ANSWERS` | `~/.local/share/hintdb/answers` | answers saved by `hint remember`; `/dev/null` turns them off |
 | `HINTDB_WRONG` | `~/.local/share/hintdb/wrong` | commands marked by `hint forget`; `/dev/null` turns it off |
 | `HISTFILE` | `~/.bash_history` | the history `hint remember` reads; export it if yours is elsewhere |
+
+For example, a larger model kept loaded for two hours, with 12 of its layers
+on the GPU:
+
+```bash
+export HINT_MODEL=qwen2.5-coder:7b
+```
+
+```bash
+export HINT_KEEP_ALIVE=2h
+```
+
+```bash
+export HINT_OLLAMA_OPTIONS='{"num_gpu": 12}'
+```
+
+```bash
+export HINT_TIMEOUT=120
+```
+
+`HINT_DEBUG=1` prints the model, keep_alive, think, timeout and options each
+lookup sends, and a thinking model's reasoning. Ollama ignores an option name
+it does not know, with only a warning in its own log, so check the spelling
+there if a setting seems to have no effect.
+Ollama loads a model on the first lookup after it was unloaded (by default
+after 5 minutes idle); that lookup takes longer.
 
 The query log stays on your machine, like your shell history, and contains
 commands from it.

@@ -33,7 +33,7 @@ export HINTDB_DB="$tmp/hint.db" HINTDB_MANDB="$tmp/man.db"
 export HINTDB_SOURCES="$tmp/sources" HISTFILE="$fix/history"
 export HINTDB_LOG="$tmp/queries.jsonl" HINTDB_ANSWERS="$tmp/answers" HINTDB_WRONG="$tmp/wrong"
 export HINTDB_APROPOS="cat $fix/apropos.txt"
-unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL
+unset HINTDB_IGNORE HINTDB_NO_MAN HINT_DEBUG HINT_MODEL HINT_KEEP_ALIVE HINT_OLLAMA_OPTIONS HINT_TIMEOUT HINT_THINK
 
 pass=0 fail=0
 
@@ -453,7 +453,7 @@ chmod 700 "$tmp/ro"
 
 echo "== hint (stub Ollama)"
 reply="$tmp/reply"
-export STUB_REPLY_FILE="$reply"
+export STUB_REPLY_FILE="$reply" STUB_THINKING_FILE="$tmp/thinking"
 : > "$reply"
 python3 "$here/stub_ollama.py" "$tmp/port" "$tmp/request" &
 stub_pid=$!
@@ -499,6 +499,62 @@ has "request: system asks for different tools when unsure" \
   "$(jq -r '.messages[0].content' <<<"$req")" "If you are not sure which tool fits, use a different tool on each line."
 has "request: last message is the query" \
   "$(jq -r '.messages[-1].content' <<<"$req")" "short dns lookup"
+has "request: no keep_alive unless HINT_KEEP_ALIVE is set" "$(jq -r 'has("keep_alive")' <<<"$req")" "false"
+has "request: think false by default" "$(jq -c .think <<<"$req")" "false"
+
+# Model settings: HINT_KEEP_ALIVE, HINT_OLLAMA_OPTIONS, HINT_TIMEOUT.
+printf '%s\n' 'dig +short example.org' > "$reply"
+HINT_KEEP_ALIVE=2h hint dns lookup >/dev/null 2>&1
+has "HINT_KEEP_ALIVE=2h: sent as a string" "$(jq -c .keep_alive <"$tmp/request")" '"2h"'
+HINT_KEEP_ALIVE=-1 hint dns lookup >/dev/null 2>&1
+has "HINT_KEEP_ALIVE=-1: sent as a number" "$(jq -c .keep_alive <"$tmp/request")" '-1'
+HINT_OLLAMA_OPTIONS='{"num_gpu": 12, "num_predict": 60}' hint dns lookup >/dev/null 2>&1
+req=$(cat "$tmp/request")
+has "HINT_OLLAMA_OPTIONS: new option added" "$(jq -c .options.num_gpu <<<"$req")" "12"
+has "HINT_OLLAMA_OPTIONS: overrides hint's own" "$(jq -c .options.num_predict <<<"$req")" "60"
+has "HINT_OLLAMA_OPTIONS: hint's other options kept" "$(jq -c .options.temperature <<<"$req")" "0"
+for bad_opts in 'num_gpu=12' '[1,2]' '{"a":1} {"b":2}' '"x"'; do
+  : > "$tmp/request"
+  out=$(HINT_OLLAMA_OPTIONS="$bad_opts" hint dns lookup 2>&1)
+  status "HINT_OLLAMA_OPTIONS=$bad_opts: exit 1" 1 $?
+  has "HINT_OLLAMA_OPTIONS=$bad_opts: says it must be a JSON object" "$out" \
+    "hint: HINT_OLLAMA_OPTIONS must be one JSON object"
+  [ -s "$tmp/request" ] && bad "HINT_OLLAMA_OPTIONS=$bad_opts: nothing sent" || ok "HINT_OLLAMA_OPTIONS=$bad_opts: nothing sent"
+done
+err=$(HINT_DEBUG=1 HINT_KEEP_ALIVE=30m HINT_OLLAMA_OPTIONS='{"num_gpu": 12}' hint dns lookup 2>&1 >/dev/null)
+has "HINT_DEBUG: request settings shown" "$err" \
+  'hint: request: model qwen2.5-coder:3b, keep_alive 30m, think false, timeout 60 s, options {"temperature":0,"num_predict":120,"num_gpu":12}'
+err=$(HINT_DEBUG=1 hint dns lookup 2>&1 >/dev/null)
+has "HINT_DEBUG: unset keep_alive shown as the server default" "$err" "keep_alive server default"
+HINT_THINK=true hint dns lookup >/dev/null 2>&1
+has "HINT_THINK=true: sent as a boolean" "$(jq -c .think <"$tmp/request")" "true"
+HINT_THINK=false hint dns lookup >/dev/null 2>&1
+has "HINT_THINK=false: sent as a boolean" "$(jq -c .think <"$tmp/request")" "false"
+HINT_THINK=low hint dns lookup >/dev/null 2>&1
+has "HINT_THINK=low: sent as a string" "$(jq -c .think <"$tmp/request")" '"low"'
+printf '%s\n' 'The user wants a DNS lookup.' > "$tmp/thinking"
+err=$(HINT_DEBUG=1 HINT_THINK=true hint dns lookup 2>&1 >/dev/null)
+has "HINT_DEBUG: the model's thinking shown" "$err" "hint: model thinking:"
+has "HINT_DEBUG: the thinking text" "$err" "The user wants a DNS lookup."
+out=$(HINT_THINK=true hint dns lookup 2>&1)
+lacks "thinking is not shown without HINT_DEBUG" "$out" "The user wants a DNS lookup."
+rm -f "$tmp/thinking"
+printf '%s\n' '!error "qwen2.5-coder:3b" does not support thinking' > "$reply"
+out=$(HINT_THINK=true hint dns lookup 2>&1)
+status "HINT_THINK=true, model cannot think: exit 1" 1 $?
+has "HINT_THINK=true, model cannot think: Ollama's message shown" "$out" "does not support thinking"
+printf '%s\n' 'dig +short example.org' > "$reply"
+for bad_t in 0 abc 1.5; do
+  out=$(HINT_TIMEOUT=$bad_t hint dns lookup 2>&1)
+  status "HINT_TIMEOUT=$bad_t: exit 1" 1 $?
+  has "HINT_TIMEOUT=$bad_t: says it must be whole seconds" "$out" "hint: HINT_TIMEOUT must be a whole number of seconds"
+done
+printf '%s\n' '!sleep 3' > "$reply"
+out=$(HINT_TIMEOUT=1 hint dns lookup 2>&1)
+status "HINT_TIMEOUT=1, slow model: exit 1" 1 $?
+has "HINT_TIMEOUT=1, slow model: names the limit and the variable" "$out" \
+  "did not answer within 1 s (model qwen2.5-coder:3b); loading a model can take longer: raise HINT_TIMEOUT"
+: > "$reply"
 
 printf '%s\n' 'dig +short example.com' > "$reply"
 err=$(HINT_DEBUG=1 hint dns lookup 2>&1 >/dev/null)
